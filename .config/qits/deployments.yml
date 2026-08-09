@@ -16,3 +16,19 @@ deployment_target: platform
 # deliberately did not move with the rename — the service still serves /idp. Without this line
 # the deployer probes a 404 and rolls every deployment back as unhealthy.
 health_path: /idp/q/health/ready
+
+# THE STORE. A role and a database of this service's own on the platform's postgres, created before
+# the successor container starts and injected as QITS_RESOURCE_DB_URL / _USERNAME / _PASSWORD — the
+# generic contract the idp jar's datasource defaults read verbatim. The name is omitted, so the
+# database and the role are both `qits_platform_idp`, derived from the repository name.
+#
+# A CORE SEED SERVICE, WHICH IS WHY THE LINE ALONE IS NOT THE WHOLE ANSWER. This container boots
+# from the bootstrap CLI before any deployer exists, so at bootstrap the CLI provisions the same
+# database over plain JDBC and hands over the same three variables. This file is what governs every
+# deployment after that one.
+#
+# THE SIGNING KEY LIVES IN THAT DATABASE. A redeploy that reached a different or an empty one would
+# generate a new keypair and invalidate every token in flight, everywhere — so the database must be
+# the same one across deployments, which is exactly what a provisioned resource is and what an
+# ephemeral container layer is not.
+resources: postgresql:db

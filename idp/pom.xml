@@ -13,10 +13,10 @@
          and the minting of a token. A plain library jar: entity, persistence, control — NO
          web/JAX-RS (that is `service`).
 
-         It owns its OWN named datasource + persistence unit + Flyway lineage — a separate
-         file-based H2 under ~/.qits/data/idp (see
-         src/main/resources/META-INF/microprofile-config.properties). Signing keys live there and
-         nowhere else, which is the whole reason validation survives a restart.
+         It owns its OWN named datasource + persistence unit + Flyway lineage — a postgres database
+         of its own, provisioned for this application and handed to it as the generic resource
+         triple (see src/main/resources/META-INF/microprofile-config.properties). Signing keys live
+         there and nowhere else, which is the whole reason validation survives a restart.
 
          The directory is `idp/` (the ci/cd/service shape of the sibling repos) while the artifactId
          is `qits-idp-domain`: this module is the domain layer of the qits-idp repo, and
@@ -34,12 +34,22 @@
             <artifactId>quarkus-hibernate-orm-panache</artifactId>
         </dependency>
         <dependency>
+            <!-- The store. It was a file H2 until the platform grew resource provisioning; the
+                 signing keys now live in a postgres database created for this application before
+                 its container starts. -->
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-jdbc-h2</artifactId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Flyway 10 split its database support out of the core: without this module Flyway
+                 refuses a postgres url with "no database found to handle". It sits here because
+                 this module owns the lineage. -->
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
         <dependency>
             <!-- The token minting itself: Jwt.claims()...sign(privateKey). This is the only reason

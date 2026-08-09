@@ -11,6 +11,13 @@ serves no client in phase 1, so there is no Quinoa and no webui submodule. `./mv
 gate, and it needs no port argument — `service/src/test/resources/application.properties` sets
 `quarkus.http.test-port=0`.
 
+The store being PostgreSQL does not change that answer. `testdb/EmbeddedPg` starts **zonky's**
+postgres — real binaries resolved as ordinary Maven artifacts, spawned as a child process — and
+`testdb/EmbeddedPgConfigSource` hands its url, username and password to every `@QuarkusTest` at an
+ordinal above `application.properties`, because the port is chosen at run time and cannot be written
+down. Testcontainers is not on this classpath and must not arrive, and
+`quarkus.devservices.enabled=false` says the same thing from the other side.
+
 **`service/` compiles to a GraalVM native image.** `.sdkmanrc` names `25.0.2-graalce`. The
 consequence to keep in your head here is narrower than in the siblings and more dangerous: this
 service's whole job goes through JCA — `KeyPairGenerator`, `KeyFactory`, RS256 signing — and a
@@ -69,10 +76,27 @@ Client ids reach the log on a refusal, so `TokenService.loggable` bounds what ca
 `idp/src/main/resources/db/idp/migration/`, hand-written, its own lineage on its own datasource —
 keep appending, never edit an applied migration.
 
+**The store is PostgreSQL, and the lineage restarted at V1 to say so.** The H2 lineage was deleted
+rather than continued, on one precondition: the move is an **unwrap and a re-bootstrap**, so no
+database anywhere is on it and no `V2__move_to_postgres.sql` had a reader. It costs a fresh idp
+state — a new signing key, every token minted before the move stops verifying — which the
+re-bootstrap accepts. The fresh V1 is the H2 pair **translated and not redesigned**: `clob` became
+`text` and nothing else about either table moved, because what is stored here has identity
+semantics. **A second clean start is not a precedent** — the ordinary rule (append, never edit) is
+back from V1 onward.
+
+The datasource is the platform's generic resource contract — `jdbc.url=${QITS_RESOURCE_DB_URL}` and
+its two siblings, with **no fallback**, so a process that was handed nothing dies at Flyway instead
+of opening a store nobody meant. `.config/qits/deployments.yml` carries the `resources:
+postgresql:db` line that fills it, and the bootstrap CLI fills it for the seed container, since this
+service boots before a deployer exists.
+
 Two things about the shipped V1:
 
 - `idp_signing_key` is shaped so **rotation is a data change**. Many rows, one `ACTIVE`, all
-  published. Do not add a "one active key" constraint; H2 has no partial unique index and the reader
+  published. Do not add a "one active key" partial unique index — postgres does have one now, and
+  V1's header refuses it: a rotation inserts the new active row before retiring the old one, so the
+  index would forbid the intermediate state of the very statement order that rotates. The reader
   already resolves the newest active row.
 - `idp_client` is **empty on purpose** — phase 2's dynamic agent clients. Nothing reads it yet.
   Deleting it because it is unused would put a migration against a live database into the phase that
@@ -96,6 +120,10 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   `SigningKeys.reload()` drops the cache and goes back to the database. A generate-on-every-load
   regression changes the `kid` there.
 - `IdpPackagedSurfaceIT` runs the **packaged artifact** and asserts what a native build can silently
-  lose: the build-time route prefixes, the shipped `${user.home}`-rooted H2 default (it relocates
-  `user.home` rather than restating the URL), Flyway's migration surviving as a resource, and RSA
-  key generation plus signing in the packaged process.
+  lose: the build-time route prefixes, the shipped datasource *expression* (it hands the launched
+  process `QITS_RESOURCE_DB_URL` and its two siblings — the generic contract a deployment supplies —
+  rather than restating the datasource keys, so the jar's own `${…}` indirection is what is under
+  test), Flyway's migration surviving as a resource, and RSA key generation plus signing in the
+  packaged process. Its embedded postgres reaches the profile through a **system property**, because
+  a `QuarkusTestProfile` is instantiated in two classloaders and a static field is not shared
+  between them.

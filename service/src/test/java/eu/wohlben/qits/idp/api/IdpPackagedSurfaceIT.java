@@ -4,15 +4,12 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import eu.wohlben.qits.idp.testdb.EmbeddedPg;
 import io.quarkus.test.junit.QuarkusIntegrationTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.http.ContentType;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Comparator;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -26,9 +23,9 @@ import org.junit.jupiter.api.Test;
  *   <li>the routes are where the config says — {@code quarkus.rest.path} and {@code
  *       quarkus.http.non-application-root-path} are build-time settings baked into the artifact,
  *       and an OIDC consumer derives the discovery URL from the first of them;
- *   <li>the shipped datasource default connects and {@code db/idp/migration/} survived as a
- *       resource — migrations are loaded by scanning a classpath location, exactly the shape
- *       native-image drops;
+ *   <li>the shipped datasource <b>expression</b> resolves and connects, and {@code
+ *       db/idp/migration/} survived as a resource — migrations are loaded by scanning a classpath
+ *       location, exactly the shape native-image drops;
  *   <li><b>RSA key generation works in the packaged process.</b> Key generation, PKCS#8 encoding
  *       and RS256 signing all go through JCA providers, which is the other thing a native image
  *       can lose. A service that boots and then cannot mint is the failure this catches.
@@ -41,23 +38,45 @@ public class IdpPackagedSurfaceIT {
   private static final String SECRET = "packaged-it-secret";
 
   /**
-   * Relocates the launched artifact's state under {@code target/} by moving {@code user.home}, not
-   * by restating the settings — the idp jar's datasource default is {@code ${user.home}}-rooted, so
-   * overriding {@code user.home} leaves the <b>shipped</b> JDBC URL itself under test.
+   * Hands the launched artifact a database the way a deployment does — as the generic resource
+   * triple, not as the datasource keys. The idp jar ships {@code jdbc.url=${QITS_RESOURCE_DB_URL}}
+   * and its two siblings, so supplying the variables leaves the <b>shipped</b> expression itself
+   * under test (the AUTO_SERVER lesson, applied to what replaced that URL). Expression expansion
+   * reads the whole config, and these overrides reach the launched process as system properties, so
+   * the same three names resolve.
+   *
+   * <p>The database is an embedded postgres this JVM starts. <b>Its url travels through a system
+   * property rather than a static field</b>: a test profile is instantiated in more than one
+   * classloader, so a field written by one copy is not the field the other reads, while the process
+   * has exactly one property table.
    *
    * <p>The secret is an override for the same reason the shipped config has none: a client with no
    * secret is unusable, so the packaged process can only be asked to mint once a deployment (here,
    * this profile) gives it one.
    */
   public static class PackagedUnderTarget implements QuarkusTestProfile {
-    static final Path HOME = Path.of("target", "idp-packaged-it-home").toAbsolutePath();
+
+    /** Where the url is parked for whichever copy of this class is asked second. */
+    private static final String URL_PROPERTY = "qits.test.packaged-it.db-url";
 
     @Override
     public Map<String, String> getConfigOverrides() {
-      deleteRecursively(HOME);
       return Map.of(
-          "user.home", HOME.toString(),
+          "QITS_RESOURCE_DB_URL", databaseUrl(),
+          "QITS_RESOURCE_DB_USERNAME", EmbeddedPg.USER,
+          "QITS_RESOURCE_DB_PASSWORD", EmbeddedPg.PASSWORD,
           "qits.idp.client.prod-qits-workspaces.secret", SECRET);
+    }
+
+    private static synchronized String databaseUrl() {
+      String recorded = System.getProperty(URL_PROPERTY);
+      if (recorded != null) {
+        return recorded;
+      }
+      // localhost resolves for the launched process too — it is a child of this JVM on this host.
+      String url = EmbeddedPg.url("idp_packaged_it");
+      System.setProperty(URL_PROPERTY, url);
+      return url;
     }
   }
 
@@ -109,12 +128,9 @@ public class IdpPackagedSurfaceIT {
         "prod-qits-workspaces",
         PublishedJwks.verify(token, "qits-platform-artifacts").getSubject());
 
-    // The round trip above would look identical against an in-memory database, so pin that the
-    // process really opened the ${user.home}-rooted file H2 the idp jar ships — the file the
-    // signing key has to outlive a restart in.
-    assertTrue(
-        Files.isDirectory(PackagedUnderTarget.HOME.resolve(".qits/data/idp/h2")),
-        "the shipped file-H2 default must be what the packaged process opened");
+    // That the round trip happened at all is the proof the shipped expression resolved: the jar
+    // carries no fallback URL, so a process that reached a store did so through
+    // QITS_RESOURCE_DB_URL, and one that had not would have died at Flyway before serving a route.
   }
 
   @Test
@@ -129,16 +145,5 @@ public class IdpPackagedSurfaceIT {
         .then()
         .statusCode(401)
         .body("error", equalTo("invalid_client"));
-  }
-
-  private static void deleteRecursively(Path root) {
-    if (!Files.exists(root)) {
-      return;
-    }
-    try (var walk = Files.walk(root)) {
-      walk.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
-    } catch (Exception e) {
-      throw new IllegalStateException("could not clear " + root, e);
-    }
   }
 }
