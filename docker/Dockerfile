@@ -14,24 +14,31 @@
 # documents and a token endpoint. That is the one way this Dockerfile is shorter than its siblings'.
 #
 # --- this image does NOT run with an empty environment, and that is not a packaging bug ------------
-# `docker run --rm qits/idp:latest` dies before the HTTP listener: uid 1001 has no /etc/passwd entry
-# in ubi-minimal, a native image resolves user.home through getpwuid(2) rather than $HOME, and the
-# ${user.home}-rooted H2 default the `idp` jar ships has nowhere to land. IT IS DELIBERATELY LEFT
-# THAT WAY (the qits-ci stance), and here the stake is higher than for any sibling:
+# `docker run --rm qits/idp:latest` dies before the HTTP listener: the `idp` jar ships its datasource
+# as ${QITS_RESOURCE_DB_URL} and its two siblings with NO fallback, so an unset triple leaves the
+# expression unresolvable and the process stops at Flyway. IT IS DELIBERATELY LEFT THAT WAY (the
+# qits-ci stance), and here the stake is higher than for any sibling:
 #
-#   THE SIGNING KEY LIVES IN THAT DATABASE. An idp that comes up healthy on an empty environment
-#   writes its keypair into the container's own writable layer, and the next redeploy generates a
-#   new one — invalidating every token in flight, everywhere, with nothing in any log to say why.
-#   A container that refuses to start is the failure you see; one that starts on ephemeral storage
-#   is the failure that hides for a week.
+#   THE SIGNING KEY LIVES IN THAT DATABASE. An idp that came up healthy against a store nobody meant
+#   would generate a new keypair, and the next redeploy another one — invalidating every token in
+#   flight, everywhere, with nothing in any log to say why. A container that refuses to start is the
+#   failure you see; one that starts on a store of its own invention is the failure that hides for a
+#   week.
 #
-# So a deployment mounts a volume at /data (which this image owns, see below) and names the
-# database:
+# The triple is NOT set by hand. `.config/qits/deployments.yml` declares `resources: postgresql:db`,
+# and qits-platform-deployments creates the role and the database on the tier's postgres before this
+# container starts and injects all three; at bootstrap, before any deployer exists, the CLI does the
+# same over plain JDBC. What a `docker run` by hand looks like, and what those two produce:
 #
-#   docker run -v qits-platform-idp-data:/data \
-#     -e QUARKUS_DATASOURCE_IDP_JDBC_URL=jdbc:h2:file:/data/idp/h2/idp \
+#   docker run \
+#     -e QITS_RESOURCE_DB_URL=jdbc:postgresql://prod-qits-oci-postgresql:5432/qits_platform_idp \
+#     -e QITS_RESOURCE_DB_USERNAME=qits_platform_idp \
+#     -e QITS_RESOURCE_DB_PASSWORD=... \
 #     -e QITS_IDP_CLIENT_PROD_QITS_CI_SECRET=... \
 #     ...
+#
+# No volume, and that is the change: the store is a database on another host now, so this container
+# keeps nothing that has to outlive it.
 #
 # --- what else a deployment owns ------------------------------------------------------------------
 #
@@ -50,8 +57,8 @@
 #                           warning per export loudly enough to bury real lines
 #                           (OTEL_SDK_DISABLED=true is the escape hatch).
 #
-# This image needs no docker socket, no git, and no network access to anything but the callers that
-# dial it. It talks to nothing.
+# This image needs no docker socket and no git. It dials exactly one host — the postgres its
+# datasource names — and otherwise only answers the callers that dial it.
 #
 # --- stage `build`: native-compile ----------------------------------------------------------------
 # The builder JDK MUST be 25: native-image cannot read bytecode newer than its own JDK, and this
@@ -92,13 +99,6 @@ RUN curl --version >/dev/null
 # failsafe's `native.image.path`; all three move together.
 COPY --from=build --chown=1001:root /src/service/target/qits-idp /work/qits-idp
 RUN chmod +x /work/qits-idp
-
-# The mount point for the H2 url, created here so it is OWNED. Docker seeds a fresh named volume
-# from whatever the image has at the mount path, ownership included; with no such directory it
-# makes one root-owned 0755, and the boot then dies on an AccessDeniedException rather than on the
-# config error the header documents. Group-writable and group-root because a ubi image is meant to
-# survive being assigned an arbitrary UID with GID 0.
-RUN mkdir -p /data/idp && chown -R 1001:root /data && chmod -R 775 /data
 
 EXPOSE 8080
 USER 1001

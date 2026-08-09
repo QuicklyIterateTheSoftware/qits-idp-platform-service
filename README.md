@@ -68,6 +68,14 @@ PEM with a random `kid`. Every start after that reads it back. **That row is the
 issued before a restart still verifies after one** — an idp pointed at a fresh or ephemeral database
 rotates its key by accident and invalidates everything in flight.
 
+The datasource is a **PostgreSQL database of this service's own**, provisioned for it and handed
+over as the platform's generic resource triple: `QITS_RESOURCE_DB_URL`, `_USERNAME`, `_PASSWORD`.
+`.config/qits/deployments.yml` declares `resources: postgresql:db`, which is what makes
+qits-platform-deployments create the role and the database `qits_platform_idp` before the successor
+container starts; at bootstrap, before any deployer exists, the CLI does the same. There is no
+default and no fallback URL — a process handed none stops at Flyway rather than opening a store
+nobody meant.
+
 The table holds many keys with one active, so rotation is a data change: insert a new `ACTIVE` row,
 retire the old one, and both keep being published until the old one's tokens have expired.
 `SigningKeys.reload()` is what picks the change up.
@@ -82,9 +90,11 @@ suite takes a free port (`service/src/test/resources/application.properties` set
     ./mvnw verify -DskipITs=false    # plus IdpPackagedSurfaceIT, against the fast-jar
     ./mvnw verify -Dnative           # plus the same IT, against the GraalVM binary
 
+The suite opens a real PostgreSQL — zonky's binaries, resolved as ordinary Maven artifacts and
+spawned as a child process. Still no docker.
+
 `docker/Dockerfile` ships the native binary. Read its header before deploying: the container refuses
-to boot without `QUARKUS_DATASOURCE_IDP_JDBC_URL` pointing at a mounted volume, and that is
-deliberate.
+to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 
 ## What is not here yet
 
