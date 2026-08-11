@@ -32,6 +32,15 @@
     </modules>
 
     <properties>
+        <!-- THE PLATFORM'S OWN MAVEN REPOSITORY, and this repo's first two artifacts from it:
+             qits-db-core (PatientPgDriver, which the idp datasource opens every connection through)
+             and qits-arch-rules (the test that refuses to let the datasource baseline go missing).
+             Both are published by qits-integrations-quarkus. The url is a property so the image
+             build can point it at the address the builder container can actually reach — see
+             docker/Dockerfile and .qits-maven-settings.xml. -->
+        <qits.db-core.version>2026.811.152803</qits.db-core.version>
+        <qits.arch-rules.version>2026.811.152803</qits.arch-rules.version>
+        <qits.maven.repository.url>http://localhost:8081/artifacts/maven/maven</qits.maven.repository.url>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -101,8 +110,31 @@
                 <artifactId>qits-idp-domain</artifactId>
                 <version>${project.version}</version>
             </dependency>
+            <dependency>
+                <!-- PatientPgDriver. Runtime scope wherever it is declared: no code here names the
+                     class, only the datasource's `jdbc.driver` line does. -->
+                <groupId>${project.groupId}</groupId>
+                <artifactId>qits-db-core</artifactId>
+                <version>${qits.db-core.version}</version>
+            </dependency>
+            <dependency>
+                <!-- The platform's shared rules, test scope. DatasourceBaselineRules is what this
+                     repo takes them for. -->
+                <groupId>${project.groupId}</groupId>
+                <artifactId>qits-arch-rules</artifactId>
+                <version>${qits.arch-rules.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
+
+    <repositories>
+        <repository>
+            <!-- Where the two qits jars above come from. Named `qits-maven` because the image
+                 build's settings file mirrors exactly that id — see .qits-maven-settings.xml. -->
+            <id>qits-maven</id>
+            <url>${qits.maven.repository.url}</url>
+        </repository>
+    </repositories>
 
     <build>
         <pluginManagement>

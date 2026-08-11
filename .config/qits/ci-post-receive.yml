@@ -4,7 +4,14 @@ steps:
     timeout-seconds: 3600
     script: |
       set -eu
+      # --network host, NOT a custom network: buildkit (the builder format the platform targets — a
+      # swarm cannot assume the legacy builder) refuses custom networks on a build. Host networking
+      # is buildkit-supported, and the maven registry's host-published address is derived from the
+      # same injected env the image tag uses, so no address is stated here. The build needs it now
+      # that this repo depends on qits-db-core and qits-arch-rules.
       ref="$QITS_REGISTRY/$QITS_IMAGE_REPOSITORY/qits-platform-idp:$QITS_CI_SHA"
-      docker build -t "$ref" -f docker/Dockerfile .
+      docker build --network host \
+        --build-arg QITS_MAVEN_REPOSITORY_URL="http://$QITS_REGISTRY/artifacts/maven/maven" \
+        -t "$ref" -f docker/Dockerfile .
       docker push "$ref"
       docker rmi "$ref" || true

@@ -11,6 +11,22 @@ serves no client in phase 1, so there is no Quinoa and no webui submodule. `./mv
 gate, and it needs no port argument — `service/src/test/resources/application.properties` sets
 `quarkus.http.test-port=0`.
 
+**The one thing it now needs besides Maven Central** is the platform's own Maven repository, for
+`qits-db-core` and `qits-arch-rules` — the patient driver every connection opens through, and the
+test that refuses to let the datasource baseline go missing. `<repositories>` in the root pom points
+at `${qits.maven.repository.url}` (the developer-host address by default); the image build overrides
+it with `--build-arg QITS_MAVEN_REPOSITORY_URL`, and `.qits-maven-settings.xml` mirrors the
+`qits-maven` repository id onto that address — an exact id match, which is what gets past Maven's
+`external:http:*` blocker without permitting arbitrary HTTP repositories. The docker build moved to
+`--network host` in the same commit, because buildkit needs it to reach the registry at all. Those
+three files move together; a third platform jar needs none of them again.
+
+**The baseline is not a formality here.** Every other service asks this one for a token, so a
+postgres cutover that fails this pool fails the platform's whole call graph rather than one
+application. `DatasourceBaselineTest` is three lines and fails the build naming any postgresql
+datasource missing one of the three; the doctrine and the measurements are in the superproject's
+`docs/project-setup-quinoa-angular.md`.
+
 The store being PostgreSQL does not change that answer. `testdb/EmbeddedPg` starts **zonky's**
 postgres — real binaries resolved as ordinary Maven artifacts, spawned as a child process — and
 `testdb/EmbeddedPgConfigSource` hands its url, username and password to every `@QuarkusTest` at an

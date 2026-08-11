@@ -59,6 +59,14 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <!-- The platform's shared rules. DatasourceBaselineRules is what this repo takes them
+                 for, and it lives here because this module's config is the deployable's whole
+                 config — the `idp` datasource is declared in the domain jar. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-arch-rules</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>

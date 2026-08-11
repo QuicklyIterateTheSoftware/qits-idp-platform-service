@@ -74,14 +74,25 @@ COPY .mvn/ .mvn/
 RUN ./mvnw --version
 
 # The whole reactor, not a module list. `-am` builds `service`'s dependency from source —
-# `qits-idp-domain` is a 1.0.0-SNAPSHOT this repo never publishes, so a builder container with an
-# empty ~/.m2 has nowhere else to get it. `.dockerignore` is what keeps this cheap.
+# `qits-idp-domain` is a version this repo never publishes, so a builder container with an empty
+# ~/.m2 has nowhere else to get it. `.dockerignore` is what keeps this cheap.
 COPY . .
 
 # Tests are skipped because `./mvnw verify` on a clone is their gate (AGENTS.md); stopping at
 # `package` rather than `verify` keeps IdpPackagedSurfaceIT out of the image build. Cap
 # native-image RAM so the build is deterministic on small machines.
-RUN ./mvnw -B -ntp -pl service -am package -Dnative -DskipTests \
+#
+# --- where the two qits jars come from ------------------------------------------------------------
+# This repo depends on qits-db-core (PatientPgDriver) and qits-arch-rules, which live only on the
+# platform's own Maven repository. The CI recipe passes the address the step container can reach, and
+# `.qits-maven-settings.xml` mirrors the `qits-maven` repository id onto it — an exact id match,
+# which is what gets past Maven's external:http:* blocker without permitting arbitrary HTTP
+# repositories. The ARG default is the developer-host address, so a plain host-side `docker build`
+# still works.
+ARG QITS_MAVEN_REPOSITORY_URL=http://localhost:8081/artifacts/maven/maven
+ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
+RUN ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
+      -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
       -Dquarkus.native.native-image-xmx=4g
 
 # --- runtime --------------------------------------------------------------------------------------
