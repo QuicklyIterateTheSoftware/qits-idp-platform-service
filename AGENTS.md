@@ -38,6 +38,16 @@ unchanged, because one load still commits before the next begins. What is no lon
 the cache assignment, and two concurrent reloads writing complete key sets in either order is not a
 disagreement worth a lock. `SigningKeyCutoverTest` is the proof.
 
+**And it stays `DbRetry.call`, not `DbRetry.inNewTx`** — considered on 2026-08-11 and refused, so
+that the question is not reopened by the write inside it. `inNewTx` owns the transaction boundary,
+which here would have to sit either outside the monitor (a thread blocked on the lock would then be
+holding an open transaction and its connection) or inside it (the pause back in the monitor, the
+exact thing the paragraph above moved out). Both are worse shapes, and the safety they would buy is
+already here: this write is generate-**or**-load, so a second attempt re-reads first and a key that
+did commit is found rather than duplicated, and the ambiguous case `inNewTx` exists to refuse — a
+failure the transaction manager reports — carries no connection marker for `DbRetry.call` to match,
+so it is rethrown either way. A write without that re-read would need `inNewTx`; this one does not.
+
 The store being PostgreSQL does not change that answer. `testdb/EmbeddedPg` starts **zonky's**
 postgres — real binaries resolved as ordinary Maven artifacts, spawned as a child process — and
 `testdb/EmbeddedPgConfigSource` hands its url, username and password to every `@QuarkusTest` at an
