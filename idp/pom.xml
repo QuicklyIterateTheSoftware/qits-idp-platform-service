@@ -41,13 +41,14 @@
             <artifactId>quarkus-jdbc-postgresql</artifactId>
         </dependency>
         <dependency>
-            <!-- PatientPgDriver, which the datasource this module ships opens every connection
-                 through. RUNTIME scope: no code here names the class, only the `jdbc.driver` line
-                 in META-INF/microprofile-config.properties does — and the dependency sits beside
-                 that line so the two cannot drift apart. -->
+            <!-- Two things from one jar. PatientPgDriver, which the datasource this module ships
+                 opens every connection through — named only by the `jdbc.driver` line in
+                 META-INF/microprofile-config.properties, and the dependency sits beside that line
+                 so the two cannot drift apart. And DbRetry, which SigningKeys.reload holds the key
+                 load through a cutover with: that one is compiled against, which is why the scope
+                 is no longer `runtime`. -->
             <groupId>${project.groupId}</groupId>
             <artifactId>qits-db-core</artifactId>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

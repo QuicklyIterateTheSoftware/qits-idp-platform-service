@@ -27,6 +27,17 @@ application. `DatasourceBaselineTest` is three lines and fails the build naming 
 datasource missing one of the three; the doctrine and the measurements are in the superproject's
 `docs/project-setup-quinoa-angular.md`.
 
+**One seam carries a `DbRetry` on top of that, and only one.** Issuing a token does not read
+postgres — `SigningKeys.signing()` and `published()` take a volatile cache — so the only calls a
+cutover can reach are the boot load and a rotation, both through `SigningKeys.reload()`, which is
+wrapped. The shape is the point: the `synchronized` moved off `reload` and onto the private
+`loadOnce`, so the retry sits **outside** the monitor and an attempt takes the lock and releases it
+before the pause. A retry inside a monitor sleeps while holding it, which is why the placement rules
+forbid it; the guard the lock exists for — two cold callers must not both generate a key — is
+unchanged, because one load still commits before the next begins. What is no longer serialized is
+the cache assignment, and two concurrent reloads writing complete key sets in either order is not a
+disagreement worth a lock. `SigningKeyCutoverTest` is the proof.
+
 The store being PostgreSQL does not change that answer. `testdb/EmbeddedPg` starts **zonky's**
 postgres — real binaries resolved as ordinary Maven artifacts, spawned as a child process — and
 `testdb/EmbeddedPgConfigSource` hands its url, username and password to every `@QuarkusTest` at an

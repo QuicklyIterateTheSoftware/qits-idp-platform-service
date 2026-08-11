@@ -1,5 +1,6 @@
 package eu.wohlben.qits.idp.control;
 
+import eu.wohlben.qits.db.DbRetry;
 import eu.wohlben.qits.idp.entity.IdpSigningKey;
 import eu.wohlben.qits.idp.entity.IdpSigningKeyStatus;
 import eu.wohlben.qits.idp.persistence.IdpSigningKeyRepository;
@@ -85,12 +86,32 @@ public class SigningKeys {
 
   /**
    * Re-read the keys from the database, generating one only if there is no active key at all.
-   * Synchronized so two callers on a cold cache cannot both generate.
+   *
+   * <p><b>Held through a postgres cutover</b> ({@link DbRetry}, connection-class failures only, 15
+   * seconds). Both callers are ones a lost connection would answer badly: the boot load fails the
+   * process, and a rotation would report a database that is coming back as a rotation that did not
+   * happen.
+   *
+   * <p>The retry is <b>outside</b> the monitor, which is why {@link #loadOnce()} carries the
+   * {@code synchronized} and this method no longer does. Each attempt takes the lock and releases
+   * it, so nothing sleeps while holding it — and the guard the lock exists for is untouched, since
+   * one load still finishes and commits before the next begins. What is no longer serialized is the
+   * assignment below: two concurrent reloads may write their key sets in either order, and both are
+   * complete sets read moments apart. The reads never take the lock at all — {@link #signing()} and
+   * {@link #published()} go through the volatile field.
    */
-  public synchronized KeySet reload() {
-    KeySet next = QuarkusTransaction.requiringNew().call(this::loadOrCreate);
+  public KeySet reload() {
+    KeySet next = DbRetry.call("idp signing key load", this::loadOnce);
     cached = next;
     return next;
+  }
+
+  /**
+   * One load attempt, in its own transaction. Synchronized so two callers on a cold cache cannot
+   * both generate; it waits for nothing, so the lock is held for one round trip.
+   */
+  private synchronized KeySet loadOnce() {
+    return QuarkusTransaction.requiringNew().call(this::loadOrCreate);
   }
 
   private KeySet keys() {

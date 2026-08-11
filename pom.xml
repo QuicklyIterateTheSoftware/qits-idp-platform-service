@@ -111,8 +111,8 @@
                 <version>${project.version}</version>
             </dependency>
             <dependency>
-                <!-- PatientPgDriver. Runtime scope wherever it is declared: no code here names the
-                     class, only the datasource's `jdbc.driver` line does. -->
+                <!-- PatientPgDriver, named by the datasource's `jdbc.driver` line, and DbRetry,
+                     which SigningKeys is compiled against. -->
                 <groupId>${project.groupId}</groupId>
                 <artifactId>qits-db-core</artifactId>
                 <version>${qits.db-core.version}</version>
