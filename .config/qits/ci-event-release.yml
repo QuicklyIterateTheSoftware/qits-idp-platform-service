@@ -1,0 +1,58 @@
+# The release pipeline: this repository reacts to its OWN release and pushes the image under the
+# released VERSION. qits-platform-dns' file, name for name — see that repository for the long form
+# of each rule; the short form of the ones that bite:
+#
+# - The selection naming this repository is not a loop: SCMRelease comes from qits-workspaces, and
+#   nothing in this file publishes it.
+# - `artifacts:` is a declaration, not a report — qits-ci cannot see what the step pushed and
+#   announces on the strength of it. One entry, because this pipeline pushes one image: the jars
+#   this repo builds stay inside it and no maven release publishes them.
+# - The name is unqualified on purpose; the reader supplies its own registry host.
+# - The build below is ci-post-receive.yml's, and the two must stay matched: one image content, two
+#   coordinates. `:$QITS_CI_SHA` there remains the whole contract with the deployer.
+# - This file is inert until an SCMRelease for this repository exists, and it lands first on
+#   purpose — the bus is at-most-once, so the trigger must precede the event it selects.
+event: SCMRelease
+when:
+  - repository: { exact: qits-platform-idp }
+artifacts:
+  - { type: docker, name: qits/qits-platform-idp }
+steps:
+    # ci-base, the image ci-post-receive.yml already builds this repo with: the docker CLI to build
+    # and push, and jq to read the event payload.
+  - image: qits/build-images/ci-base:latest
+    docker: true
+    timeout-seconds: 3600
+    script: |
+      # Without -e a failed docker build is swallowed and a green release run makes qits-ci announce
+      # an artifact that was never pushed. -u makes an unset registry variable stop the step.
+      set -eu
+
+      # The event, read as data: the payload reaches the container verbatim in $QITS_EVENT_PAYLOAD,
+      # with no per-field projection.
+      version=$(printf '%s' "$QITS_EVENT_PAYLOAD" | jq -r '.version')
+      # A version here is a calver or a semver, and nothing legitimate needs a character outside
+      # this set. Refused rather than quoted, because it reaches a shell and a docker reference.
+      case "$version" in
+        ''|null|*[!0-9A-Za-z._+-]*) echo "refusing an implausible version: $version" >&2; exit 1 ;;
+      esac
+      echo "releasing qits/qits-platform-idp:$version"
+
+      # The tag is the checkout target: an event-triggered run is cloned at the head of main, which
+      # a later push moves — the tag does not. The clone is shallow and carries no tags, hence the
+      # explicit refspec; the URL rather than `origin` because every address a step needs arrives
+      # as environment.
+      git fetch "$QITS_CI_REPOSITORY_URL" "refs/tags/$version:refs/tags/$version"
+      git checkout --detach "$version"
+
+      ref="$QITS_REGISTRY/$QITS_IMAGE_REPOSITORY/qits-platform-idp:$version"
+      # Same doctrine as ci-post-receive.yml: host network + derived maven address, or the
+      # qits-db-core and qits-arch-rules resolve dies inside the build.
+      docker build --network host \
+        --build-arg QITS_MAVEN_REPOSITORY_URL="http://$QITS_REGISTRY/artifacts/maven/maven" \
+        -t "$ref" -f docker/Dockerfile .
+      docker push "$ref"
+      # NO `docker rmi "$ref"`: on a CI host it frees nothing — the layers stay in the builder's
+      # cache either way — while under the containerd image store it drops the last reference to
+      # content a concurrent build of this same Dockerfile may still be resolving, which is the
+      # race that broke the release of 2026-08-11.
