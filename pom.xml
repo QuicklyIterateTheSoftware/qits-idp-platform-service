@@ -21,7 +21,7 @@
          Each comes back the day something here needs it, not before. -->
     <groupId>eu.wohlben.qits</groupId>
     <artifactId>qits-idp</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>2026.812.174007</version>
     <packaging>pom</packaging>
     <name>qits-idp</name>
 
