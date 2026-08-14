@@ -41,7 +41,9 @@ public class IdpTokenTest {
                 + "&audience=prod-qits-deployments")
             .statusCode(200)
             .body("token_type", equalTo("Bearer"))
-            .body("expires_in", equalTo(300))
+            // The SHIPPED lifetime, raised to an hour on 2026-08-14 with the commission model.
+            // That the key is honoured at all is TokenLifetimeTest's; this pins the default.
+            .body("expires_in", equalTo(3600))
             .body("access_token", notNullValue())
             // RFC 6749 §5.1 — a token response is never cached.
             .header("Cache-Control", "no-store")
@@ -54,7 +56,7 @@ public class IdpTokenTest {
     assertEquals(List.of("prod-qits-deployments"), PublishedJwks.audienceOf(claims));
     assertNotNull(claims.getIssuedAt(), "iat");
     assertEquals(
-        300,
+        3600,
         claims.getExpirationTime().getValue() - claims.getIssuedAt().getValue(),
         "exp must be iat plus the configured lifetime");
     assertNotNull(

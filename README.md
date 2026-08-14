@@ -16,6 +16,9 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 | `GET /idp/.well-known/openid-configuration` | discovery. An OIDC consumer configured with auth-server-url `http://qits-platform-idp:8080/idp` derives this URL itself. |
 | `GET /idp/jwks` | the public signing keys, each with its `kid`. |
 | `POST /idp/token` | `application/x-www-form-urlencoded`, `grant_type=client_credentials`. |
+| `POST /idp/api/clients` | commission a credential for one dynamic context. |
+| `GET /idp/api/clients` | the caller's own live commissions. |
+| `DELETE /idp/api/clients/{clientId}` | decommission one. |
 | `GET /idp/q/health/ready` | readiness, where the deployment convention expects it. |
 
 A token request authenticates with `client_secret_basic` **or** `client_secret_post`, never both,
@@ -34,7 +37,7 @@ The token is RS256, carries a `kid`, and says:
 | `iss` | `qits.idp.issuer` |
 | `sub` | the client id |
 | `aud` | the resolved audiences, always a JSON array |
-| `iat`, `exp`, `jti` | issued now, valid for `qits.idp.token-ttl-seconds` (300 by default) |
+| `iat`, `exp`, `jti` | issued now, valid for `qits.idp.token-ttl-seconds` (3600 by default) |
 | `project`, `workspace`, `branch` | only when granted to the client, copied verbatim |
 
 **Claims, not scopes.** `aud` names the service a token may be used at; the structured claims name
@@ -46,7 +49,13 @@ Refusals are RFC 6749 §5.2: `invalid_client` (401, with a `WWW-Authenticate` ch
 
 ## Clients
 
-Phase 1 clients are config, not rows. `qits.idp.clients` lists the ids that exist; each one has
+There are two kinds, and they differ in where the identity comes from: the **static service
+clients** are config, because a platform service's identity is genuinely static, and the
+**commissioned clients** are rows, because a build run or a workspace is not.
+
+### Static service clients
+
+`qits.idp.clients` lists the ids that exist; each one has
 `qits.idp.client.<id>.secret`, `.audiences`, and `.claims.<name>`. The shipped list is the names
 services are dialed by — `prod-qits-ci`, `qits-platform-artifacts`, `prod-qits-workspaces`,
 `prod-qits-gateway` — and the full key reference is in
@@ -60,6 +69,58 @@ An unconfigured deployment therefore issues nothing; `QITS_IDP_CLIENT_PROD_QITS_
 turns a client on. This is the opposite reading from `qits.artifacts.token`, where a blank value
 means "no guard" — the difference is that a guard with no secret protects a network that is already
 trusted, while an issuer with no secret would mint identity for whoever asks.
+
+### Commissioned clients
+
+A service that provisions a **dynamic context** — one ci build run, one workspace, one agent
+container — asks for a credential for that context and hands it back when the context ends. The
+credential's lifetime *is* the context's: no lease, no TTL on the pair, nothing durable left behind.
+The model, and which owner decommissions at which event, is `authenticated-reads-plan.md` in the
+qits superproject.
+
+Three verbs, all authenticated with **HTTP Basic carrying the caller's own client id and secret** —
+the pair it already holds to get tokens with. No new audience, no bearer, no second credential to
+distribute, and the idp does not have to validate its own tokens to answer.
+
+    # commission — the secret is in this answer and nowhere else
+    curl -s -u prod-qits-ci:$SECRET -H 'Content-Type: application/json' \
+      -d '{"contextKind":"ci-run","contextId":"4711"}' \
+      http://qits-platform-idp:8080/idp/api/clients
+    # 201
+    # {"clientId":"dyn-ci-run-4711-8Xq…","secret":"…","owner":"prod-qits-ci",
+    #  "contextKind":"ci-run","contextId":"4711","createdAt":"2026-08-14T11:02:03.412Z"}
+
+    # what this caller has out — for reconciling orphans after a crash
+    curl -s -u prod-qits-ci:$SECRET http://qits-platform-idp:8080/idp/api/clients
+    # 200
+    # [{"clientId":"dyn-ci-run-4711-8Xq…","owner":"prod-qits-ci",
+    #   "contextKind":"ci-run","contextId":"4711","createdAt":"…"}]
+
+    # decommission — 204
+    curl -s -X DELETE -u prod-qits-ci:$SECRET \
+      http://qits-platform-idp:8080/idp/api/clients/dyn-ci-run-4711-8Xq…
+
+The rules around them:
+
+- **A commissioned client mints exactly like a service client.** Same `POST /idp/token`, same
+  grant, same token shape — which is why docker's Bearer dance and `quarkus-oidc-client` need no
+  second code path.
+- **It is issued its owner's audiences and claims**, read from the owner's config when a token is
+  minted. Full access for now; per-context scoping is the declared follow-up, and the owner +
+  context-kind + context-id triple on the row is what it will attach to.
+- **Only a static service client may commission.** A commissioned credential authenticates here —
+  so a context can hand its own credential back — but `POST` refuses it, and the blast radius of a
+  leaked one therefore stops at one context.
+- **Decommission is deleting the row**, and it is immediate: the credential mints nothing from the
+  next request onward. **Tokens it already minted live out their `exp`**, because validation is
+  offline against the JWKS and there is no revocation list. With the shipped hour that grace is an
+  hour — see `qits.idp.token-ttl-seconds`, where the trade is written down.
+- **Only the owner may decommission or list**, or the credential itself for its own row. Anyone
+  else is told exactly what a caller naming an id that never existed is told.
+- **The secret is returned once.** The row holds a SHA-256 of it, so a dump of the idp's database
+  mints nothing. A caller that lost the secret decommissions and commissions again.
+- **The id reads in a listing** — `dyn-<kind>-<context slug>-<random>` — and cannot collide with a
+  service client's name, because config is resolved first and no static id carries the prefix.
 
 ## The signing key
 
@@ -98,7 +159,11 @@ to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 
 ## What is not here yet
 
-Phase 2 adds dynamic clients for agents — `POST/DELETE /idp/api/clients`, a lease TTL, and a
-granting template on the registrar's record. The `idp_client` table already exists for it and is
-empty. Phase 3 adds users, invites, and the authorization-code flow. See `qits-idp-plan.md` in the
-qits superproject.
+**Per-context permission scoping.** A commissioned credential gets its owner's whole access today.
+The follow-up narrows it per context — ci may publish, a refinement container may not — on the rows
+the commission API already writes, and is the same day the token lifetime is worth shrinking again.
+
+**Phase 3: users** — invites, the authorization-code flow, and the gateway cutover. See
+`qits-idp-plan.md` in the qits superproject. Note that phase 2 landed in a different shape than
+that plan describes: no lease TTL and no granting template, because a commissioned credential's
+lifetime is its context's and its access is its owner's.

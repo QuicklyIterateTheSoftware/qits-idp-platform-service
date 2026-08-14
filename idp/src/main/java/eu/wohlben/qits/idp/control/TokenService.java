@@ -10,7 +10,6 @@ import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Pattern;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -21,6 +20,11 @@ import org.jboss.logging.Logger;
  * <p>The token says who the caller is and what it may be used against. It says nothing about what
  * the caller may do — that decision belongs to the resource service, helped by the shared
  * enforcement library.
+ *
+ * <p><b>A commissioned client mints exactly like a service client.</b> This class asks {@link
+ * ClientRegistry} for a client and never learns which half answered — that identity is the whole
+ * of the commission model working, because it means docker's Bearer dance, quarkus-oidc-client and
+ * everything else already wired to this endpoint need no second code path.
  */
 @ApplicationScoped
 public class TokenService {
@@ -30,9 +34,6 @@ public class TokenService {
   /** What a caller gets back, before it is dressed as an RFC 6749 token response. */
   public record IssuedToken(String accessToken, long expiresInSeconds, List<String> audiences) {}
 
-  /** Client ids that may go into a log line verbatim. Anything else is an attacker's string. */
-  private static final Pattern LOGGABLE_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
-
   @Inject Issuer issuer;
 
   @ConfigProperty(name = "qits.idp.token-ttl-seconds")
@@ -40,7 +41,7 @@ public class TokenService {
 
   @Inject SigningKeys signingKeys;
 
-  @Inject IdpClients clients;
+  @Inject ClientRegistry clients;
 
   /**
    * Authenticate and mint.
@@ -52,18 +53,7 @@ public class TokenService {
    */
   public IssuedToken clientCredentials(
       String clientId, String secret, List<String> requestedAudiences) {
-    IdpClient client = clients.find(clientId).orElse(null);
-    // One refusal for three causes — unknown id, no secret configured, wrong secret. The caller
-    // learns only that it did not authenticate; the log line below is where the difference lives.
-    if (client == null || !client.secretMatches(secret)) {
-      LOG.warnf(
-          "token request refused for client %s: %s",
-          loggable(clientId),
-          client == null
-              ? "unknown client"
-              : (client.usable() ? "wrong secret" : "no secret configured"));
-      throw OAuthException.invalidClient("client authentication failed");
-    }
+    IdpClient client = clients.authenticate(clientId, secret);
 
     List<String> audiences = resolveAudiences(client, requestedAudiences);
     Instant now = Instant.now();
@@ -92,7 +82,7 @@ public class TokenService {
   private List<String> resolveAudiences(IdpClient client, List<String> requested) {
     List<String> allowed = client.audiences();
     if (allowed.isEmpty()) {
-      LOG.warnf("token request refused for client %s: no audiences configured", loggable(client.clientId()));
+      LOG.warnf("token request refused for client %s: no audiences configured", LoggableClientId.of(client.clientId()));
       throw OAuthException.invalidTarget("this client may request no audience");
     }
     if (requested.isEmpty()) {
@@ -102,15 +92,11 @@ public class TokenService {
     for (String audience : requested) {
       if (!allowed.contains(audience)) {
         LOG.warnf(
-            "token request refused for client %s: audience not allowed", loggable(client.clientId()));
+            "token request refused for client %s: audience not allowed", LoggableClientId.of(client.clientId()));
         throw OAuthException.invalidTarget("audience is not allowed for this client");
       }
       resolved.add(audience);
     }
     return List.copyOf(resolved);
-  }
-
-  private static String loggable(String clientId) {
-    return clientId != null && LOGGABLE_ID.matcher(clientId).matches() ? clientId : "<malformed>";
   }
 }

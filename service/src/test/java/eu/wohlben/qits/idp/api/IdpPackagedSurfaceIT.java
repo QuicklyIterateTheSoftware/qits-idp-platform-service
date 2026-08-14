@@ -133,6 +133,81 @@ public class IdpPackagedSurfaceIT {
     // QITS_RESOURCE_DB_URL, and one that had not would have died at Flyway before serving a route.
   }
 
+  /**
+   * The commission API in the packaged process: a JSON body in and out, a row written and deleted,
+   * and a credential that mints between the two.
+   *
+   * <p>It is here rather than only in the {@code @QuarkusTest} suite because every step of it is a
+   * thing a native image can lose quietly — record serialization needs a statically visible type to
+   * register for reflection, SHA-256 needs a JCA provider (the same class of failure as RSA signing
+   * above), and the {@code V2} migration has to have survived as a classpath resource for the table
+   * to exist at all. It has already earned its place: the first native build answered 500 here,
+   * because a {@code Response} return type hid the response record from the image builder.
+   */
+  @Test
+  public void thePackagedProcessCommissionsMintsAndDecommissions() {
+    String body =
+        "{\"contextKind\":\"packaged-it\",\"contextId\":\"ctx-" + System.nanoTime() + "\"}";
+    io.restassured.path.json.JsonPath commissioned =
+        given()
+            .contentType(ContentType.JSON)
+            .header("Authorization", basic("prod-qits-workspaces", SECRET))
+            .body(body)
+            .when()
+            .post("/idp/api/clients")
+            .then()
+            .statusCode(201)
+            .body("owner", equalTo("prod-qits-workspaces"))
+            .extract()
+            .jsonPath();
+
+    String clientId = commissioned.getString("clientId");
+    String secret = commissioned.getString("secret");
+    assertNotNull(clientId);
+    assertNotNull(secret);
+
+    given()
+        .contentType(ContentType.URLENC)
+        .header("Authorization", basic(clientId, secret))
+        .body("grant_type=client_credentials&audience=qits-platform-artifacts")
+        .when()
+        .post("/idp/token")
+        .then()
+        .statusCode(200);
+
+    // The listing is a second record through the same serializer, and a second native risk.
+    given()
+        .header("Authorization", basic("prod-qits-workspaces", SECRET))
+        .when()
+        .get("/idp/api/clients")
+        .then()
+        .statusCode(200)
+        .body("find { it.clientId == '" + clientId + "' }.contextKind", equalTo("packaged-it"));
+
+    given()
+        .header("Authorization", basic("prod-qits-workspaces", SECRET))
+        .when()
+        .delete("/idp/api/clients/" + clientId)
+        .then()
+        .statusCode(204);
+
+    given()
+        .contentType(ContentType.URLENC)
+        .header("Authorization", basic(clientId, secret))
+        .body("grant_type=client_credentials")
+        .when()
+        .post("/idp/token")
+        .then()
+        .statusCode(401);
+  }
+
+  private static String basic(String clientId, String secret) {
+    return "Basic "
+        + java.util.Base64.getEncoder()
+            .encodeToString(
+                (clientId + ":" + secret).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
   @Test
   public void anUnconfiguredClientStillCannotAuthenticate() {
     // Only prod-qits-workspaces was given a secret above. The other three ship without one and

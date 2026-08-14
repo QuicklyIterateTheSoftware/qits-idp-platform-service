@@ -27,10 +27,23 @@ application. `DatasourceBaselineTest` is three lines and fails the build naming 
 datasource missing one of the three; the doctrine and the measurements are in the superproject's
 `docs/project-setup-quinoa-angular.md`.
 
-**One seam carries a `DbRetry` on top of that, and only one.** Issuing a token does not read
-postgres — `SigningKeys.signing()` and `published()` take a volatile cache — so the only calls a
-cutover can reach are the boot load and a rotation, both through `SigningKeys.reload()`, which is
-wrapped. The shape is the point: the `synchronized` moved off `reload` and onto the private
+**Issuing a token for a STATIC client does not read postgres, and that has to stay true.**
+`SigningKeys.signing()` and `published()` take a volatile cache, and a static client is four config
+lookups. A commissioned client is a row, so `DynamicClients` caches a resolved one and only a miss
+reaches the store — the map is bounded by live contexts, `decommission` evicts in the same call
+that deletes, and misses are never cached, which is what makes both directions immediate. **One idp
+process is assumed** (which is what this service is deployed as); a second instance would hold its
+own copy of a row deleted at the first, and that is the day this needs a bounded entry age rather
+than a bigger cache.
+
+**Three seams carry a `DbRetry`, and they are the three that touch the store.**
+`SigningKeys.reload()` — the boot load and a rotation — plus `DynamicClients`' reads and writes.
+The writes use `DbRetry.inNewTx`/`runInNewTx` rather than `DbRetry.call`: a commission is a bare
+insert, so the retry has to own the transaction boundary to know which failures certainly did not
+commit, and a lost commit acknowledgement must be reported rather than repeated — repeating it
+would leave a second credential in the store that no owner ever heard of.
+
+The signing-key seam's shape is the part with the subtlety: the `synchronized` moved off `reload` and onto the private
 `loadOnce`, so the retry sits **outside** the monitor and an attempt takes the lock and releases it
 before the pause. A retry inside a monitor sleeps while holding it, which is why the placement rules
 forbid it; the guard the lock exists for — two cold callers must not both generate a key — is
@@ -60,7 +73,20 @@ consequence to keep in your head here is narrower than in the siblings and more 
 service's whole job goes through JCA — `KeyPairGenerator`, `KeyFactory`, RS256 signing — and a
 native image that lost a provider boots fine and cannot mint. `IdpPackagedSurfaceIT` mints a token
 in the packaged process for exactly that reason; run it (`-DskipITs=false`, or `-Dnative`) after
-touching anything about keys.
+touching anything about keys, secrets, or a JSON body.
+
+**Two native traps this repo has already fallen into, both on 2026-08-14, both caught by `-Dnative`
+and by nothing else:**
+
+- **A `SecureRandom` in a static field** is instantiated during image generation and lands in the
+  image heap with its seed baked in — every deployment of that binary would produce the same ids and
+  secrets. GraalVM refuses to build it outright. Construct one per call.
+- **A resource method returning `jakarta.ws.rs.core.Response`** carries its entity as an `Object`,
+  so the image builder has no type to register and the binary answers **500, "no properties
+  discovered"**, while the JVM suite stays green. Return `RestResponse<T>` when a method needs a
+  status or a header *and* a body; a plain `T` when it needs neither. `Response` is fine only where
+  there is no entity at all (`noContent()`), and `@RegisterForReflection` is a workaround rather
+  than the fix, because it leaves the signature still saying nothing.
 
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
@@ -75,9 +101,17 @@ package:
 
 - `idp/` — `entity`, `persistence`, `control`, `error`. Framework-free in the sense that matters:
   no JAX-RS, no web stack. `control` owns the keys (`SigningKeys`), the JWKS document (`Jwks`), the
-  client registry (`IdpClients`), the issuer string (`Issuer`) and the grant (`TokenService`).
-- `service/` — `api` only: the two metadata routes, the token endpoint, and the RFC 6749 error
-  mapper.
+  issuer string (`Issuer`), the grant (`TokenService`) and the client registry — which is three
+  classes: `IdpClients` (static, from config), `DynamicClients` (commissioned, from rows) and
+  `ClientRegistry`, which is the only thing that knows both exist.
+- `service/` — `api` only: the two metadata routes, the token endpoint, the commission API, and the
+  RFC 6749 error mapper.
+
+**`TokenService` must not learn which half a client came from.** It asks `ClientRegistry` and gets
+an `IdpClient` either way; a commissioned credential mints identically to a service client because
+there is no branch to make it differ. That identity is the whole commission model working — docker's
+Bearer dance and `quarkus-oidc-client` need no second code path — so a change that makes the token
+endpoint check the kind of client it has is a change worth arguing about first.
 
 The directories are `idp/` and `service/`; the artifactIds are `qits-idp-domain` and
 `qits-idp-service` — generic coordinates would collide in a shared `~/.m2`.
@@ -88,8 +122,9 @@ The directories are `idp/` and `service/`; the artifactIds are `qits-idp-domain`
 sibling services, and it is not cosmetic: an OIDC consumer configured with auth-server-url
 `http://qits-platform-idp:8080/idp` fetches `/idp/.well-known/openid-configuration` by its own
 derivation and follows the document from there. An `/api` segment would move the discovery document off the path
-every OIDC client computes. Phase 2's registration API takes `@Path("/api/clients")` relative to
-this, which keeps the machine-admin surface separate without moving the protocol.
+every OIDC client computes. The commission API takes `@Path("/api/clients")` relative to
+this — `/idp/api/clients` — which keeps the machine-admin surface separate without moving the
+protocol.
 
 The issuer string is spelled **once**, in `qits.idp.issuer`, and `Issuer` normalises it. The
 discovery document's `token_endpoint` and `jwks_uri` are derived from it, and so is every token's
@@ -104,9 +139,26 @@ appears.
 what keeps a caller from probing the config namespace. Keep that order.
 
 Secrets are compared with `MessageDigest.isEqual`, never `String.equals` — the comparison is against
-a value a caller may retry freely.
+a value a caller may retry freely. `ClientSecret` is where both kinds do it: a configured value
+compared as it is, a stored one compared as a SHA-256. That hash is deliberately not a password
+hash — a commissioned secret is 256 bits of `SecureRandom` and there is nothing to slow a guesser
+down, while the token path is the platform's whole call graph. The argument is in the class.
 
-Client ids reach the log on a refusal, so `TokenService.loggable` bounds what can be written there.
+Client ids reach the log on a refusal, so `LoggableClientId.of` bounds what can be written there.
+A **context id never reaches the log at all**: it is the caller's string and the generated client id
+already carries a bounded slug of it.
+
+`contextKind` and `contextId` arrive on an authenticated request and both end up inside a client id.
+The kind is matched against a lowercase-slug pattern and refused outright; the id is slugged down to
+`[a-z0-9-]` for the client id and stored raw, so what a listing shows an operator and what a
+reconcile compares are the same string the owner sent.
+
+**Randomness is generated per call, never from a static field.** A `SecureRandom` in a static is
+instantiated during native-image generation and lands in the image heap with its seed baked in —
+every deployment of that binary would then produce the same ids and secrets. GraalVM refuses to
+build it (measured 2026-08-14, `DynamicClients` was written that way first), which is the only
+reason this is a caught bug rather than a shipped one. `SigningKeys.randomKid` and
+`DynamicClients.randomToken` both construct one per call.
 
 ## Schema changes
 
@@ -135,9 +187,19 @@ Two things about the shipped V1:
   V1's header refuses it: a rotation inserts the new active row before retiring the old one, so the
   index would forbid the intermediate state of the very statement order that rotates. The reader
   already resolves the newest active row.
-- `idp_client` is **empty on purpose** — phase 2's dynamic agent clients. Nothing reads it yet.
-  Deleting it because it is unused would put a migration against a live database into the phase that
-  adds the endpoint.
+- `idp_client` was **empty on purpose** — and V2 is the migration that filled the shape in. It was
+  written for a lease (a TTL the registrar asked for, a deadline on the row, expired rows
+  collected); the credential model that shipped instead has no deadline, because a commissioned
+  credential's lifetime is its context's. So V2 renames `registered_by` to `owner`, adds
+  `context_kind` and `context_id`, and **drops `lease_expires_at`, `audiences` and `claims`**. The
+  last two go because a commissioned client is issued its *owner's* audiences and claims, resolved
+  at mint time — a column no reader has is not forward compatibility, it is a trap for whoever
+  writes it first and sees nothing happen. Per-context scoping brings them back with the code that
+  reads them.
+
+  The `add column … not null` statements have no default, so they fail loudly against a table that
+  turned out to hold rows. That is deliberate: nothing had ever written this table, and if that were
+  somehow wrong it is worth stopping for.
 
 ## Adding a dependency on another context
 
@@ -156,11 +218,24 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
 - `SigningKeyPersistenceTest` exercises the restart seam the suite cannot actually restart:
   `SigningKeys.reload()` drops the cache and goes back to the database. A generate-on-every-load
   regression changes the `kid` there.
+- `CommissionedClientsTest` is the commission API end to end, and its cases are the invariants
+  rather than the endpoints: a commissioned client mints exactly what its owner may, the row holds
+  no plaintext, decommission stops the minting on the very next request, only the owner (or the
+  credential itself) may delete, a commissioned client may not commission, and the listing is the
+  caller's own. The suite shares one application and therefore one store, so **every test names its
+  own `contextKind`** and the listing case filters on it instead of assuming an empty table.
+- `TokenLifetimeTest` costs its own application start to pin that `qits.idp.token-ttl-seconds` is
+  honoured, in both places a caller reads a lifetime. The number is a trade (see the key's comment),
+  and shrinking it again is the lever that closes the post-decommission grace — so the lever has to
+  stay connected.
 - `IdpPackagedSurfaceIT` runs the **packaged artifact** and asserts what a native build can silently
   lose: the build-time route prefixes, the shipped datasource *expression* (it hands the launched
   process `QITS_RESOURCE_DB_URL` and its two siblings — the generic contract a deployment supplies —
   rather than restating the datasource keys, so the jar's own `${…}` indirection is what is under
-  test), Flyway's migration surviving as a resource, and RSA key generation plus signing in the
-  packaged process. Its embedded postgres reaches the profile through a **system property**, because
+  test), Flyway's migrations surviving as resources, and RSA key generation plus signing in the
+  packaged process. **The commission round trip is there too** — commission, mint, decommission,
+  refused — because every step of it is a thing native can lose quietly: record deserialization
+  needs reflection registration, SHA-256 needs a JCA provider, and the table only exists if `V2`
+  survived the packaging. Its embedded postgres reaches the profile through a **system property**, because
   a `QuarkusTestProfile` is instantiated in two classloaders and a static field is not shared
   between them.

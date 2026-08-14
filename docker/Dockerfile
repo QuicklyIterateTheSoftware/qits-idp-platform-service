@@ -91,7 +91,19 @@ COPY . .
 # still works.
 ARG QITS_MAVEN_REPOSITORY_URL=http://registry.dev.localhost:8080/artifacts/maven/maven
 ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
-RUN ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
+#
+# --- and the credential that answers the registry's 401 -------------------------------------------
+# Once reads through the edge are gated, that resolve needs one. It arrives as two BuildKit secret
+# mounts, which reach THIS `RUN`'s environment and nothing else — not a layer, not the image
+# history. A `--build-arg` would be recorded there, on an image anyone can pull, which is the whole
+# reason this is a mount. `.qits-maven-settings.xml` reads the pair as the `qits-maven-network`
+# server. This service mints those clients; its own build consumes one like every other repository's.
+#
+# Absent secrets leave both variables unset and the resolve anonymous — today's state, and a
+# developer host's permanently, because Maven sends credentials only when a repository answers 401.
+RUN --mount=type=secret,id=qits-client-id,env=QITS_MAVEN_AUTH_USR \
+    --mount=type=secret,id=qits-client-secret,env=QITS_MAVEN_AUTH_PSW \
+    ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
       -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
       -Dquarkus.native.native-image-xmx=4g
 
