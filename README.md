@@ -1,11 +1,18 @@
 # qits-platform-idp
 
-The platform's own identity provider. Phase 1 — this tree — is **machine identity only**: an RS256
-signing key that survives restarts, a JWKS, an OIDC discovery document, and a `client_credentials`
-token endpoint the platform's services authenticate to each other with.
+The platform's own identity provider, for **machines and for people**.
 
-There is no user, no login and no session here. Browser sessions stay at the gateway, which keeps
-forwarding `X-Qits-User`; this service becomes the auth server that gateway points at in phase 3.
+The machine half is an RS256 signing key that survives restarts, a JWKS, an OIDC discovery document,
+and a `client_credentials` token endpoint the platform's services authenticate to each other with,
+plus a commission API for the credentials that belong to one dynamic context.
+
+The user half is accounts: an operator registers with a one-time token minted at bootstrap, logs in
+with a passkey (WebAuthn) or an optional password, and holds an opaque `qits-session` cookie that
+the edge introspects here and turns into the `X-Qits-User` / `X-Qits-User-Id` / `X-Qits-Roles`
+headers services already read. **There is no OAuth dance for the first-party UI** and no session at
+the gateway any more: the edge is the single ingress and terminates the browser session against
+this service. The model, the rollout order and the flags are `user-authentication-plan.md` in the
+qits superproject.
 
 ## The surface
 
@@ -19,6 +26,14 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 | `POST /idp/api/clients` | commission a credential for one dynamic context. |
 | `GET /idp/api/clients` | the caller's own live commissions. |
 | `DELETE /idp/api/clients/{clientId}` | decommission one. |
+| `POST /idp/api/auth/register-options` | WebAuthn creation options. Guarded by a register token or a session. |
+| `POST /idp/api/auth/register` | an attestation or a password → an account and a session. |
+| `POST /idp/api/auth/login-options` | WebAuthn request options. Anonymous. |
+| `POST /idp/api/auth/login` | an assertion or `{username, password}` → a session. |
+| `POST /idp/api/auth/logout` | revoke the session and clear the cookie. |
+| `POST /idp/api/auth/password` | set or replace the signed-in account's password. |
+| `POST /idp/api/sessions/introspect` | what the edge asks a cookie about. Basic, static client. |
+| `POST /idp/api/register-tokens` | mint a one-time register token. Basic, static client. |
 | `GET /idp/q/health/ready` | readiness, where the deployment convention expects it. |
 | `GET /idp/` | the client — four routes, `/idp/login`, `/idp/register`, `/idp/clients` and `/idp/users`. |
 
@@ -137,6 +152,89 @@ The rules around them:
 - **The id reads in a listing** — `dyn-<kind>-<context slug>-<random>` — and cannot collide with a
   service client's name, because config is resolved first and no static id carries the prefix.
 
+## Users
+
+Accounts are **per-installation**. They live in this service's store and survive deploys and
+restarts like every other idp row, and they are never shared or migrated between installations: the
+localhost platform now and a domain-hosted one later each start from their own register token. That
+is the decision that makes a passkey's binding to one host a non-issue.
+
+The user row is minimal on purpose — an id, a unique username, an optional password hash — and
+**there is no role column**. Roles are `idp_user_role`, an assignment table, from day one. The
+strings are namespaced `$app:$resource:$role` with the middle segment omitted while unused; a
+bootstrap registration grants `qits-platform:admin` and `qits:admin` and nothing else writes the
+table today. The idp stores them and interprets none of them.
+
+### Getting the first account
+
+A register token is a row, minted through the API, printed by the bootstrap — never logged, because
+this service's logs ship to qits-observability and a credential must not ride the log plane. It is
+good for exactly one account, and only a **static** service client may mint one (the commissioning
+rule, reused).
+
+    # mint — the token is in this answer and nowhere else
+    curl -s -X POST -u prod-qits-ci:$SECRET \
+      http://qits-platform-idp:8080/idp/api/register-tokens
+    # 201 {"id":"…","token":"CUiyE4rThoFF…","createdAt":"…"}
+
+Registration is then two calls from the browser: `POST /idp/api/auth/register-options` with the
+token and a username, which answers the WebAuthn creation options verbatim for
+`navigator.credentials.create()`, and `POST /idp/api/auth/register` with the resulting attestation.
+**The token is checked at the first call**, before any ceremony state exists, so an authenticator is
+never asked to make a key that will be thrown away. The second call creates the account, stores the
+passkey, spends the token, grants the two roles and opens a session — one transaction.
+
+`{"password":"…"}` instead of an attestation registers without a passkey. That path exists for
+automated callers and for the one browsing route with no secure context (see below).
+
+### Logging in, and the session
+
+`POST /idp/api/auth/login-options` then `.../login` with the assertion, or one `.../login` with
+`{username, password}`. Either way the answer is the same four fields and a cookie:
+
+    Set-Cookie: qits-session=<43 chars>; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax
+
+`Secure` is appended when the request — or `X-Forwarded-Proto` — says https. There is no `Domain`,
+so the cookie is host-only. `Path=/` because the cookie is for the **edge**, which introspects it on
+requests to every segment, not for this service.
+
+The value is 256 random bits and nothing else. This store holds a `sha-256:` fingerprint of it, so a
+dump of the idp's database logs nobody in, and the only way to learn anything from a cookie is
+`POST /idp/api/sessions/introspect` — Basic, static client, the edge's own `{env}-qits-edge`
+credential:
+
+    curl -s -u prod-qits-edge:$SECRET -H 'Content-Type: application/json' \
+      -d '{"token":"<cookie value>"}' \
+      http://qits-platform-idp:8080/idp/api/sessions/introspect
+    # 200 {"userId":"…","username":"alice","roles":["qits-platform:admin","qits:admin"],
+    #      "expiresAt":"2026-08-15T05:48:00.427825Z"}
+    # 404 for anything not live — unknown, expired or revoked alike
+
+**An opaque cookie rather than a JWT the edge could verify offline** is the trade this service
+makes: it costs one cached call per request and it buys revocation, because logout is a row update
+and there is no revocation list to distribute. Revocation therefore lags at the edge by its own
+cache TTL — seconds, configurable there, and stated so nobody files it as a bug.
+
+Sessions expire absolutely, `qits.idp.session-ttl` after they open (PT12H). There is no sliding
+renewal yet.
+
+### Passkeys, and the one route without them
+
+The ceremony is quarkus-security-webauthn used **as a library**: this service calls it, verifies the
+attestation and the assertion itself, and issues its own session. The extension's built-in endpoints
+are off and its own `quarkus-credential` cookie is never written.
+
+`quarkus.webauthn.relying-party.id` and `.origins` are the browser-facing host, from
+`QITS_IDP_WEBAUTHN_RP_ID` and `QITS_IDP_WEBAUTHN_ORIGINS`, defaulting to `localhost` and
+`http://localhost:8080`. **A passkey is bound to the rp id it was registered under** and will not
+assert under another — which costs nothing here, because accounts are per-installation anyway.
+
+`localhost`, `*.localhost` and the loopback addresses are secure contexts over plain http by browser
+rule, so passkeys work on `http://localhost:8080` with no TLS. The one route that is **not** a
+secure context is a raw IP — `http://<wsl-ip>:8080`, today's Windows-browser path to this platform —
+where `navigator.credentials` does not exist at all and only the password fallback logs in. TLS via
+`QITS_DOMAIN`, or Windows reaching localhost again, dissolves it.
+
 ## The signing key
 
 Generated on the first start that finds no active key, and stored in the `idp` datasource as PKCS#8
@@ -188,7 +286,19 @@ to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 The follow-up narrows it per context — ci may publish, a refinement container may not — on the rows
 the commission API already writes, and is the same day the token lifetime is worth shrinking again.
 
-**Phase 3: users** — invites, the authorization-code flow, and the gateway cutover. See
-`qits-idp-plan.md` in the qits superproject. Note that phase 2 landed in a different shape than
-that plan describes: no lease TTL and no granting template, because a commissioned credential's
-lifetime is its context's and its access is its owner's.
+**Authorization.** Roles are stored, reported by introspection and delivered to every service, and
+**nothing enforces one yet**. Which route demands which role is a later plan, together with
+per-context scoping on dynamic clients.
+
+**Invites for user #2, and an account page.** The register-token API already has the shape an invite
+needs — a session-authenticated user minting one — but the UX is undecided, and there is no listing
+of a user's own authenticators or sessions to remove one from.
+
+**Sliding session renewal, and "remember me".** The TTL is absolute. Logging in again is one
+ceremony, so this is a comfort question rather than a blocker.
+
+**An authorization-code flow for third-party apps.** Nothing first-party needs it — the UI is
+first-party and the edge terminates its session — but the issuer core is ready if it ever comes.
+Note that `qits-idp-plan.md`'s phase 3 described users arriving as an OAuth dance against this
+service with the session at the gateway; that is superseded by `user-authentication-plan.md`, and
+phase 2 also landed differently from that sketch (no lease TTL, no granting template).

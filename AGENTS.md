@@ -41,12 +41,22 @@ process is assumed** (which is what this service is deployed as); a second insta
 own copy of a row deleted at the first, and that is the day this needs a bounded entry age rather
 than a bigger cache.
 
-**Three seams carry a `DbRetry`, and they are the three that touch the store.**
-`SigningKeys.reload()` — the boot load and a rotation — plus `DynamicClients`' reads and writes.
-The writes use `DbRetry.inNewTx`/`runInNewTx` rather than `DbRetry.call`: a commission is a bare
-insert, so the retry has to own the transaction boundary to know which failures certainly did not
-commit, and a lost commit acknowledgement must be reported rather than repeated — repeating it
-would leave a second credential in the store that no owner ever heard of.
+**Every seam that touches the store carries a `DbRetry`, and the rule is one boundary per use
+case.** `SigningKeys.reload()` — the boot load and a rotation — plus `DynamicClients`' reads and
+writes, plus `Users`, `RegisterTokens`, `Sessions` and `Registrations`. The writes use
+`DbRetry.inNewTx`/`runInNewTx` rather than `DbRetry.call`: a commission is a bare insert, so the
+retry has to own the transaction boundary to know which failures certainly did not commit, and a
+lost commit acknowledgement must be reported rather than repeated — repeating it would leave a
+second credential in the store that no owner ever heard of.
+
+**The user-side classes add one shape worth knowing.** Each of `Users`, `RegisterTokens` and
+`Sessions` owns its transaction in its public methods, and each also has package-private `…Row`
+methods doing the same work *inside the caller's* transaction. That exists for exactly one caller:
+`Registrations`, which puts a single boundary around the five writes a registration is — the
+account, its factor, the token's consumption, the two roles, the session. A token spent against an
+account that was never created leaves an installation with no way in and a one-time ticket gone, so
+"all or none" here is not tidiness. Do not add a second composite operation without deciding which
+of the two sets it uses; mixing them nests transactions.
 
 The signing-key seam's shape is the part with the subtlety: the `synchronized` moved off `reload` and onto the private
 `loadOnce`, so the retry sits **outside** the monitor and an attempt takes the lock and releases it
@@ -85,7 +95,9 @@ and by nothing else:**
 
 - **A `SecureRandom` in a static field** is instantiated during image generation and lands in the
   image heap with its seed baked in — every deployment of that binary would produce the same ids and
-  secrets. GraalVM refuses to build it outright. Construct one per call.
+  secrets. GraalVM refuses to build it outright. Construct one per call — which is what
+  `RandomSecret` does, and it is where every credential value (a commissioned secret, a register
+  token, a session cookie) now comes from.
 - **A resource method returning `jakarta.ws.rs.core.Response`** carries its entity as an `Object`,
   so the image builder has no type to register and the binary answers **500, "no properties
   discovered"**, while the JVM suite stays green. Return `RestResponse<T>` when a method needs a
@@ -108,9 +120,24 @@ package:
   no JAX-RS, no web stack. `control` owns the keys (`SigningKeys`), the JWKS document (`Jwks`), the
   issuer string (`Issuer`), the grant (`TokenService`) and the client registry — which is three
   classes: `IdpClients` (static, from config), `DynamicClients` (commissioned, from rows) and
-  `ClientRegistry`, which is the only thing that knows both exist.
-- `service/` — `api` only: the two metadata routes, the token endpoint, the commission API, and the
-  RFC 6749 error mapper.
+  `ClientRegistry`, which is the only thing that knows both exist. The user half is four more:
+  `Users`, `RegisterTokens`, `Sessions`, and `Registrations`, which is the only thing that knows
+  those three exist — the same split as `ClientRegistry`, for the same reason. `PasswordHash` and
+  `RandomSecret` are the two value helpers beside them.
+- `service/` — `api` only, and it is the HTTP boundary plus the one bean the web stack demands:
+  the two metadata routes, the token endpoint, the commission API, the user surface
+  (`IdpAuthController`, `IdpSessionsController`, `IdpRegisterTokensController`), the shared
+  machine-caller check (`BasicCaller`), the session cookie's spelling (`SessionCookie`), and two
+  error mappers. `WebAuthnCredentials` lives here rather than in the domain because
+  quarkus-security-webauthn is a web stack — it depends on quarkus-vertx-http and its ceremonies
+  take a `RoutingContext` — and the domain jar's rule is that it does not.
+
+**Two error vocabularies, and the difference is the caller.** `OAuthException` is RFC 6749's and its
+mapper attaches `WWW-Authenticate: Basic` to every 401, because the machine surfaces authenticate
+with a Basic pair. `AuthException` is the user surface's — two codes, `invalid_request` and
+`invalid_credentials` — and its mapper sends **no** challenge, because these routes are called by a
+browser with `fetch` and a Basic challenge there is a native credentials dialog in front of the
+login page. A new route picks the one that matches who calls it, not the one nearest in the file.
 
 **`TokenService` must not learn which half a client came from.** It asks `ClientRegistry` and gets
 an `IdpClient` either way; a commissioned credential mints identically to a service client because
@@ -130,6 +157,14 @@ derivation and follows the document from there. An `/api` segment would move the
 every OIDC client computes. The commission API takes `@Path("/api/clients")` relative to
 this — `/idp/api/clients` — which keeps the machine-admin surface separate without moving the
 protocol.
+
+**Everything added since goes under `/api` too, and that is why the ignore list has not had to
+change**: `/api/auth/*`, `/api/sessions/introspect` and `/api/register-tokens` are all covered by
+the single `/api` entry. Keep it that way — a route added as a new literal beside `/token` and
+`/jwks` costs an ignore-list entry, an `IdpPackagedSurfaceIT` case, and the risk described below.
+The one surface this rule does not cover is the extension's: quarkus-security-webauthn registers
+`/idp/q/webauthn/*` (under `/q`, already ignored) and `/.well-known/webauthn` at the **root**,
+outside `/idp` entirely, which the gateway therefore never routes to.
 
 **That departure is what makes `quarkus.quinoa.ignored-path-prefixes` load-bearing here.** The
 client mounts at `/idp/` like every sibling's, but because the REST surface is the segment rather
@@ -170,13 +205,27 @@ reconcile compares are the same string the owner sent.
 instantiated during native-image generation and lands in the image heap with its seed baked in —
 every deployment of that binary would then produce the same ids and secrets. GraalVM refuses to
 build it (measured 2026-08-14, `DynamicClients` was written that way first), which is the only
-reason this is a caught bug rather than a shipped one. `SigningKeys.randomKid` and
-`DynamicClients.randomToken` both construct one per call.
+reason this is a caught bug rather than a shipped one. `RandomSecret` is where the rule is written
+down and where every credential value comes from; `SigningKeys.randomKid` keeps its own copy of the
+idiom because a `kid` is an identifier rather than a secret.
+
+**A username is an HTTP header value, and `Users.normaliseUsername` is where that is enforced.** It
+leaves this service as `X-Qits-User`, injected by the edge and read by five services, so a name
+carrying a carriage return would be a header-splitting hole in every one of them. Control
+characters are refused; beyond that and the column's length the name is the user's own.
 
 ## Schema changes
 
 `idp/src/main/resources/db/idp/migration/`, hand-written, its own lineage on its own datasource —
-keep appending, never edit an applied migration.
+keep appending, never edit an applied migration. V1 is the keys and an empty client table, V2 fills
+the client table in, V3 is the five user tables.
+
+**One column set in V3 is not a design and must not be treated as one.** `idp_webauthn_credential`
+is exactly `WebAuthnCredentialRecord.RequiredPersistedData` from quarkus-security-webauthn, read off
+the extension's source — that record is what `fromRequiredPersistedData` rebuilds a verifiable
+credential out of, so a field dropped from it is a login that cannot be checked. Its `username`
+member is the one thing not stored, because the join to `idp_user` carries it. A Quarkus upgrade
+that changes that record changes this table.
 
 **The store is PostgreSQL, and the lineage restarted at V1 to say so.** The H2 lineage was deleted
 rather than continued, on one precondition: the move is an **unwrap and a re-bootstrap**, so no
@@ -237,6 +286,22 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   credential itself) may delete, a commissioned client may not commission, and the listing is the
   caller's own. The suite shares one application and therefore one store, so **every test names its
   own `contextKind`** and the listing case filters on it instead of assuming an empty table.
+- `UserAuthenticationTest` is the user surface end to end, and its cases are the invariants: a
+  register token makes exactly one account, the two bootstrap roles are granted as rows, the cookie
+  carries exactly the attributes the plan fixed, a session introspects until it is revoked and not
+  after, only a static client may mint or introspect, and every way a login can fail is one 401
+  whose body is byte-for-byte the same. **The ceremony is real** —
+  `quarkus-test-security-webauthn`'s emulated authenticator holds an EC keypair and signs actual
+  assertions, so nothing here is a fixture that can go stale. Two things it constrains:
+  `WebAuthnTestHardware` hard-codes the origin `http://localhost:8080`, which must be a
+  **shipped** `quarkus.webauthn.origins` value (webauthn4j checks the origin inside the browser's
+  own clientDataJSON, never the port the request arrived on — so a random test port is fine), and
+  the emulator hashes `localhost` as the relying party, which the shipped rp id must therefore be.
+  Every test invents its own username, because the suite shares one application and one store.
+- `SessionLifetimeTest` costs its own application start to pin `qits.idp.session-ttl`, the way
+  `TokenLifetimeTest` does for the token's. It is also the only place expiry is proven: the shipped
+  twelve hours cannot be waited out, and expiry is the third of the three states — unknown, revoked,
+  expired — that introspection has to refuse alike.
 - `TokenLifetimeTest` costs its own application start to pin that `qits.idp.token-ttl-seconds` is
   honoured, in both places a caller reads a lifetime. The number is a trade (see the key's comment),
   and shrinking it again is the lever that closes the post-decommission grace — so the lever has to
@@ -249,7 +314,13 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   packaged process. **The commission round trip is there too** — commission, mint, decommission,
   refused — because every step of it is a thing native can lose quietly: record deserialization
   needs reflection registration, SHA-256 needs a JCA provider, and the table only exists if `V2`
-  survived the packaging. Its embedded postgres reaches the profile through a **system property**, because
+  survived the packaging. **The user round trip is there for the same reason and is the heavier
+  case** — register a passkey, log in with it, introspect, log out: the ceremony is JCA end to end
+  (`KeyFactory.getInstance("EC")` rebuilding the stored key, `SHA256withECDSA` verifying the
+  assertion), webauthn4j parses CBOR reflectively, four request and response records need types the
+  image builder can see, and `V3` has to have survived as a resource for any of the five tables to
+  exist. A binary that lost any of it boots, answers the discovery document, and verifies no login.
+  Its embedded postgres reaches the profile through a **system property**, because
   a `QuarkusTestProfile` is instantiated in two classloaders and a static field is not shared
   between them. **The client's probes are here for the same reason** — Quinoa is off in test mode,
   so `/idp/` is served by nothing during the `@QuarkusTest` suite: that the page arrives with the

@@ -1,6 +1,5 @@
 package eu.wohlben.qits.idp.api;
 
-import eu.wohlben.qits.idp.control.ClientRegistry;
 import eu.wohlben.qits.idp.control.DynamicClients;
 import eu.wohlben.qits.idp.control.DynamicClients.Commissioned;
 import eu.wohlben.qits.idp.control.DynamicClients.StoredClient;
@@ -36,9 +35,9 @@ import org.jboss.resteasy.reactive.RestResponse;
  * adds nothing: no new audience to configure, no bearer-validation stack in the service that issues
  * the bearers (the idp validating its own tokens would be a circular boot dependency the moment the
  * signing key load and the commission call meet), and no second credential for a deployment to
- * distribute. It is the same {@code client_secret_basic} the token endpoint already accepts, read
- * by the same {@link BasicCredentials} parser and checked by the same {@link ClientRegistry}, so
- * there is exactly one answer in this service to "is this who it says it is".
+ * distribute. It is the same {@code client_secret_basic} the token endpoint already accepts, and it
+ * is read and checked by {@link BasicCaller}, which every machine surface here shares — so there is
+ * exactly one answer in this service to "is this who it says it is".
  *
  * <p>A token-based guard would be the right call the day these endpoints need per-caller
  * permissions beyond "is it a service client" — that is the same day per-context scoping lands, and
@@ -76,7 +75,7 @@ public class IdpClientsController {
   public record CommissionView(
       String clientId, String owner, String contextKind, String contextId, String createdAt) {}
 
-  @Inject ClientRegistry registry;
+  @Inject BasicCaller caller;
 
   @Inject DynamicClients dynamicClients;
 
@@ -99,17 +98,15 @@ public class IdpClientsController {
   @Consumes(MediaType.APPLICATION_JSON)
   public RestResponse<CommissionResponse> commission(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization, CommissionRequest request) {
-    IdpClient caller = caller(authorization);
-    if (!registry.isStatic(caller.clientId())) {
-      throw OAuthException.accessDenied("a commissioned client may not commission another");
-    }
+    IdpClient owner =
+        caller.staticOnly(authorization, "a commissioned client may not commission another");
     if (request == null) {
       throw OAuthException.invalidRequest(
           "a JSON body naming contextKind and contextId is required");
     }
 
     Commissioned issued =
-        dynamicClients.commission(caller.clientId(), request.contextKind(), request.contextId());
+        dynamicClients.commission(owner.clientId(), request.contextKind(), request.contextId());
     StoredClient client = issued.client();
     return RestResponse.ResponseBuilder.create(
             Response.Status.CREATED,
@@ -136,8 +133,8 @@ public class IdpClientsController {
    */
   @GET
   public List<CommissionView> list(@HeaderParam(HttpHeaders.AUTHORIZATION) String authorization) {
-    IdpClient caller = caller(authorization);
-    return dynamicClients.listOwnedBy(caller.clientId()).stream()
+    IdpClient owner = caller.authenticated(authorization);
+    return dynamicClients.listOwnedBy(owner.clientId()).stream()
         .map(
             client ->
                 new CommissionView(
@@ -165,22 +162,10 @@ public class IdpClientsController {
   public Response decommission(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
       @PathParam("clientId") String clientId) {
-    IdpClient caller = caller(authorization);
-    if (!dynamicClients.decommission(clientId, caller.clientId())) {
+    IdpClient owner = caller.authenticated(authorization);
+    if (!dynamicClients.decommission(clientId, owner.clientId())) {
       throw OAuthException.notFound("no such commissioned client");
     }
     return Response.noContent().build();
-  }
-
-  /**
-   * Who is calling. Basic only — this is a JSON API, not the token endpoint, so there is no form to
-   * carry credentials and no second place to look.
-   */
-  private IdpClient caller(String authorization) {
-    BasicCredentials credentials = BasicCredentials.parse(authorization);
-    if (credentials == null) {
-      throw OAuthException.invalidClient("client authentication is required");
-    }
-    return registry.authenticate(credentials.clientId(), credentials.secret());
   }
 }

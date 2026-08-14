@@ -4,10 +4,12 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- Standalone parent for the qits-idp repo: the platform's own identity provider. Phase 1 is
-         MACHINE identity only — an RS256 signing key that survives restarts, a JWKS, an OIDC
-         discovery document, and a `client_credentials` token endpoint for the long-lived services.
-         Users, login and invite tokens are phase 3 and are not in this tree yet.
+    <!-- Standalone parent for the qits-idp repo: the platform's own identity provider, for MACHINES
+         and for PEOPLE. The machine half is an RS256 signing key that survives restarts, a JWKS, an
+         OIDC discovery document, a `client_credentials` token endpoint and the commission API. The
+         user half is accounts: a one-time register token, WebAuthn passkeys with an optional
+         password, and opaque sessions the edge introspects. There is no OAuth dance for the
+         first-party UI — the edge is the single ingress and terminates the browser session here.
 
          The qits-cd/qits-ci case exactly: DELIBERATELY ITS OWN GAV, no <parent>, versions that must
          stay in step with the platform (Quarkus, JDK release) duplicated on purpose — a clone of

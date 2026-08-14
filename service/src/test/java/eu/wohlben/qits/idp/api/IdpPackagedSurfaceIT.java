@@ -3,6 +3,7 @@ package eu.wohlben.qits.idp.api;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,7 +12,9 @@ import eu.wohlben.qits.idp.testdb.EmbeddedPg;
 import io.quarkus.test.junit.QuarkusIntegrationTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
+import io.restassured.filter.cookie.CookieFilter;
 import io.restassured.http.ContentType;
+import io.vertx.core.json.JsonObject;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +34,11 @@ import org.junit.jupiter.api.Test;
  *   <li><b>RSA key generation works in the packaged process.</b> Key generation, PKCS#8 encoding
  *       and RS256 signing all go through JCA providers, which is the other thing a native image
  *       can lose. A service that boots and then cannot mint is the failure this catches.
+ *   <li><b>the WebAuthn ceremony works in the packaged process</b>, which is the same class of loss
+ *       one layer heavier: rebuilding a stored public key is {@code KeyFactory.getInstance("EC")},
+ *       verifying an assertion is {@code SHA256withECDSA}, and webauthn4j parses CBOR reflectively.
+ *       A binary that lost any of it boots, serves the discovery document, and cannot verify a
+ *       single login.
  *   <li><b>the client is served, and does not swallow the protocol.</b> Quinoa is disabled by
  *       default in test mode, so no {@code @QuarkusTest} builds or serves the SPA and every
  *       assertion about {@code /idp/} would pass against a process with no client in it. The
@@ -324,6 +332,133 @@ public class IdpPackagedSurfaceIT {
         .post("/idp/token")
         .then()
         .statusCode(401);
+  }
+
+  /**
+   * The whole user round trip in the packaged process: mint a register token, register a passkey,
+   * log in with it, introspect the cookie, log out.
+   *
+   * <p>It is here for the same reason the commission round trip is, and it is the heavier case of
+   * the two. <b>Every step is something a native image can lose quietly.</b> The ceremony runs on
+   * JCA end to end — {@code KeyFactory.getInstance("EC")} rebuilding the stored public key, {@code
+   * SHA256withECDSA} verifying the assertion, SHA-256 fingerprinting the session — and a binary
+   * that lost a provider boots, serves the discovery document, and cannot verify a single login.
+   * Beside that: webauthn4j parses CBOR reflectively, four request and response records have to
+   * survive as types the image builder can see, and {@code V3} has to have survived as a classpath
+   * resource for any of the five tables to exist.
+   *
+   * <p>The password path is deliberately not repeated here — bcrypt is exercised by the
+   * {@code @QuarkusTest} suite and carries none of the reflective risk above.
+   */
+  @Test
+  public void thePackagedProcessRegistersAPasskeyLogsInWithItAndIntrospectsTheSession() {
+    String username = "packaged-it-" + java.util.UUID.randomUUID();
+    CookieFilter browser = new CookieFilter();
+    WebAuthnTestHardware authenticator = new WebAuthnTestHardware();
+
+    String registerToken =
+        given()
+            .header("Authorization", basic("prod-qits-workspaces", SECRET))
+            .when()
+            .post("/idp/api/register-tokens")
+            .then()
+            .statusCode(201)
+            .extract()
+            .path("token");
+    assertNotNull(registerToken, "the bootstrap reads this field by name");
+
+    String registerChallenge =
+        given()
+            .filter(browser)
+            .contentType(ContentType.JSON)
+            .body("{\"username\":\"" + username + "\",\"token\":\"" + registerToken + "\"}")
+            .when()
+            .post("/idp/api/auth/register-options")
+            .then()
+            .statusCode(200)
+            .extract()
+            .path("challenge");
+
+    io.restassured.response.Response registered =
+        given()
+            .filter(browser)
+            .contentType(ContentType.JSON)
+            .body(
+                new JsonObject()
+                    .put("username", username)
+                    .put("token", registerToken)
+                    .put("attestation", authenticator.registration(registerChallenge))
+                    .encode())
+            .when()
+            .post("/idp/api/auth/register");
+    registered.then().statusCode(200).body("username", equalTo(username));
+    String userId = registered.jsonPath().getString("userId");
+
+    // A second browser, holding nothing — so the login below stands on the stored credential and
+    // not on anything left over from the registration.
+    CookieFilter secondVisit = new CookieFilter();
+    String loginChallenge =
+        given()
+            .filter(secondVisit)
+            .contentType(ContentType.JSON)
+            .body("{\"username\":\"" + username + "\"}")
+            .when()
+            .post("/idp/api/auth/login-options")
+            .then()
+            .statusCode(200)
+            .extract()
+            .path("challenge");
+
+    io.restassured.response.Response loggedIn =
+        given()
+            .filter(secondVisit)
+            .contentType(ContentType.JSON)
+            .body(
+                new JsonObject()
+                    .put("username", username)
+                    .put("assertion", authenticator.assertion(loginChallenge))
+                    .encode())
+            .when()
+            .post("/idp/api/auth/login");
+    loggedIn.then().statusCode(200).body("userId", equalTo(userId));
+
+    String session = sessionCookie(loggedIn);
+    assertNotNull(session, "a login sets the cookie the edge introspects");
+
+    given()
+        .header("Authorization", basic("prod-qits-workspaces", SECRET))
+        .contentType(ContentType.JSON)
+        .body(new JsonObject().put("token", session).encode())
+        .when()
+        .post("/idp/api/sessions/introspect")
+        .then()
+        .statusCode(200)
+        .body("username", equalTo(username))
+        .body("roles", hasItems("qits-platform:admin", "qits:admin"));
+
+    given()
+        .cookie("qits-session", session)
+        .when()
+        .post("/idp/api/auth/logout")
+        .then()
+        .statusCode(204);
+
+    given()
+        .header("Authorization", basic("prod-qits-workspaces", SECRET))
+        .contentType(ContentType.JSON)
+        .body(new JsonObject().put("token", session).encode())
+        .when()
+        .post("/idp/api/sessions/introspect")
+        .then()
+        .statusCode(404);
+  }
+
+  private static String sessionCookie(io.restassured.response.Response response) {
+    return response.getHeaders().getValues("Set-Cookie").stream()
+        .filter(line -> line.startsWith("qits-session="))
+        .map(line -> line.substring("qits-session=".length(), line.indexOf(';')))
+        .findFirst()
+        .orElse(null);
   }
 
   private static String basic(String clientId, String secret) {

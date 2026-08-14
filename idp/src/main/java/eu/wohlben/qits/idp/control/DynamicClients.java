@@ -6,9 +6,7 @@ import eu.wohlben.qits.idp.error.OAuthException;
 import eu.wohlben.qits.idp.persistence.IdpDynamicClientRepository;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.security.SecureRandom;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -234,18 +232,10 @@ public class DynamicClients {
   }
 
   /**
-   * Random bytes, base64url.
-   *
-   * <p><b>The generator is constructed per call and must not become a static field.</b> A {@code
-   * SecureRandom} held in a static is instantiated during native-image generation and lands in the
-   * image heap with a seed baked in — every deployment of that binary would then commission the
-   * same ids and the same secrets. GraalVM refuses to build it, which is how this was caught rather
-   * than shipped; {@code SigningKeys.randomKid} has the same shape for the same reason. Commission
-   * is not a hot path, so constructing one costs nothing worth the risk.
+   * Random bytes, base64url — {@link RandomSecret}, which is where the rule about never holding a
+   * {@code SecureRandom} in a static field is written down and why.
    */
   private static String randomToken(int bytes) {
-    byte[] value = new byte[bytes];
-    new SecureRandom().nextBytes(value);
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
+    return RandomSecret.bytes(bytes);
   }
 }

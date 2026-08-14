@@ -12,9 +12,11 @@
     </parent>
 
     <!-- The idp HTTP boundary: `eu.wohlben.qits.idp.api` — the discovery document, the JWKS, the
-         token endpoint and the commission API. Everything below it (keys, clients, minting) is
-         `qits-idp-domain`. This module also carries the client: Quinoa builds the SPA submodule at
-         src/main/webui during augmentation and serves it at /idp/.
+         token endpoint, the commission API, and the user surface (register, login, logout,
+         password, session introspection, register-token minting). Everything below it (keys,
+         clients, minting, accounts, sessions) is `qits-idp-domain`. This module also carries the
+         client: Quinoa builds the SPA submodule at src/main/webui during augmentation and serves it
+         at /idp/.
 
          A DEPLOYABLE APP, not a library JAR — <packaging>quarkus</packaging> binds augmentation
          into the lifecycle so it cannot be silently misplaced (the migration-deployables-plan.md
@@ -71,8 +73,38 @@
             <artifactId>quarkus-quinoa</artifactId>
         </dependency>
         <dependency>
+            <!-- The WebAuthn ceremony: challenge generation, attestation and assertion verification,
+                 webauthn4j underneath. In quarkus-bom, so no version here.
+
+                 THIS SERVICE USES IT AS A LIBRARY, NOT AS A LOGIN. WebAuthnSecurity is called
+                 programmatically from IdpAuthController and the idp issues its OWN opaque session;
+                 the extension's own `quarkus-credential` cookie is never written, because
+                 rememberUser() is never called. Its two built-in POST endpoints stay off (their
+                 defaults, restated in application.properties) — they would register and log in on
+                 their own terms, with no register token and no idp session.
+
+                 It belongs to `service` and not to the domain jar because it is a web stack: it
+                 depends on quarkus-vertx-http, its ceremony calls take a RoutingContext, and the
+                 challenge it issues rides a cookie. The store behind it is the domain's; the bridge
+                 between the two is WebAuthnCredentials in this module. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-security-webauthn</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- WebAuthnHardware: an emulated authenticator that produces real attestations and real
+                 assertions with a real EC keypair. It is what lets the @QuarkusTest suite run the
+                 whole ceremony — the alternative would be recorded fixtures, which stop being valid
+                 the moment a challenge is random, which it is.
+
+                 Note it hard-codes `localhost` as the relying party it hashes into its authenticator
+                 data, which is why the suite's rp id has to be that and is. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-security-webauthn</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
