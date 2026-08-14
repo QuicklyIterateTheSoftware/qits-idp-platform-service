@@ -56,4 +56,22 @@ public class OAuthException extends RuntimeException {
   public static OAuthException invalidTarget(String description) {
     return new OAuthException("invalid_target", 400, description);
   }
+
+  /**
+   * The caller authenticated and still may not do this — a commissioned client asking to
+   * commission another. 403, because it is authorization that failed, and the code is RFC 6749's
+   * own {@code access_denied} so the commission API answers in one shape with the token endpoint.
+   */
+  public static OAuthException accessDenied(String description) {
+    return new OAuthException("access_denied", 403, description);
+  }
+
+  /**
+   * No such commissioned client — <b>or</b> one the caller does not own. Deliberately one answer
+   * for both: an owner must not be able to discover which contexts other services hold by asking
+   * to delete their credentials.
+   */
+  public static OAuthException notFound(String description) {
+    return new OAuthException("not_found", 404, description);
+  }
 }

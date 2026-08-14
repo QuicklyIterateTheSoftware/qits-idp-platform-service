@@ -23,6 +23,9 @@ import org.eclipse.microprofile.config.Config;
  *
  * <p>Nothing is cached. A client is four config lookups, the token endpoint is not a hot path, and
  * a cache here would only add a question about when a changed secret takes effect.
+ *
+ * <p>This is the <b>static</b> half of the registry. Commissioned clients are rows and live in
+ * {@link DynamicClients}; {@link ClientRegistry} asks this one first, always.
  */
 @ApplicationScoped
 public class IdpClients {
@@ -47,7 +50,8 @@ public class IdpClients {
     return Optional.of(
         new IdpClient(
             clientId,
-            config.getOptionalValue(prefix + "secret", String.class).orElse(null),
+            ClientSecret.configured(
+                config.getOptionalValue(prefix + "secret", String.class).orElse(null)),
             config.getOptionalValues(prefix + "audiences", String.class).orElse(List.of()),
             claims(prefix)));
   }

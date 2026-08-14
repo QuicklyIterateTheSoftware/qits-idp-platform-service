@@ -13,14 +13,9 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import java.io.UnsupportedEncodingException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -39,7 +34,6 @@ import java.util.Map;
 public class IdpTokenController {
 
   private static final String GRANT_CLIENT_CREDENTIALS = "client_credentials";
-  private static final String BASIC_PREFIX = "basic ";
 
   @Inject TokenService tokenService;
 
@@ -68,7 +62,7 @@ public class IdpTokenController {
       throw OAuthException.unsupportedGrantType("only client_credentials is supported");
     }
 
-    Credentials credentials = credentials(authorization, clientIdParam, clientSecretParam);
+    BasicCredentials credentials = credentials(authorization, clientIdParam, clientSecretParam);
     IssuedToken issued =
         tokenService.clientCredentials(
             credentials.clientId(), credentials.secret(), audiences(audienceParams));
@@ -85,15 +79,13 @@ public class IdpTokenController {
         .build();
   }
 
-  private record Credentials(String clientId, String secret) {}
-
   /**
    * The client's credentials, from the Authorization header or the form — not both, and at least
-   * one.
+   * one. The header half is {@link BasicCredentials}, which the commission API reads too.
    */
-  private static Credentials credentials(
+  private static BasicCredentials credentials(
       String authorization, String clientIdParam, String clientSecretParam) {
-    Credentials basic = basic(authorization);
+    BasicCredentials basic = BasicCredentials.parse(authorization);
     boolean postPresent = clientIdParam != null && !clientIdParam.isBlank();
     if (basic != null && postPresent) {
       throw OAuthException.invalidRequest(
@@ -105,49 +97,7 @@ public class IdpTokenController {
     if (!postPresent) {
       throw OAuthException.invalidClient("client authentication is required");
     }
-    return new Credentials(clientIdParam, clientSecretParam);
-  }
-
-  /**
-   * {@code client_secret_basic}: base64 of {@code id:secret}, both form-urlencoded first (RFC 6749
-   * §2.3.1). Decoding them back is what makes a secret with a {@code :} or a {@code +} in it work;
-   * a client that did not encode is unaffected, because our ids and generated secrets contain
-   * nothing that encodes.
-   *
-   * <p>Returns null when the header is absent or is not Basic — a malformed Basic header is a
-   * refusal, not a fall-through to the form, or a caller could hide a bad header behind good form
-   * fields.
-   */
-  private static Credentials basic(String authorization) {
-    if (authorization == null
-        || !authorization.toLowerCase(Locale.ROOT).startsWith(BASIC_PREFIX)) {
-      return null;
-    }
-    String decoded;
-    try {
-      decoded =
-          new String(
-              Base64.getDecoder().decode(authorization.substring(BASIC_PREFIX.length()).trim()),
-              StandardCharsets.UTF_8);
-    } catch (IllegalArgumentException e) {
-      throw OAuthException.invalidClient("malformed Basic credentials");
-    }
-    int separator = decoded.indexOf(':');
-    if (separator < 0) {
-      throw OAuthException.invalidClient("malformed Basic credentials");
-    }
-    return new Credentials(
-        formDecode(decoded.substring(0, separator)), formDecode(decoded.substring(separator + 1)));
-  }
-
-  private static String formDecode(String value) {
-    try {
-      return URLDecoder.decode(value, StandardCharsets.UTF_8.name());
-    } catch (UnsupportedEncodingException | IllegalArgumentException e) {
-      // A value that is not valid percent-encoding is taken as-is: it is then simply not the
-      // configured secret, and the request fails as an authentication failure rather than a 500.
-      return value;
-    }
+    return new BasicCredentials(clientIdParam, clientSecretParam);
   }
 
   /** Repeated {@code audience} parameters and whitespace-separated values both flatten to here. */
