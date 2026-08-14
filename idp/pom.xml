@@ -5,13 +5,16 @@
     <parent>
         <groupId>eu.wohlben.qits</groupId>
         <artifactId>qits-idp</artifactId>
-        <version>2026.814.122135</version>
+        <version>2026.814.191019</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <!-- The issuer domain: the persisted signing keys, the static client registry read from config,
-         and the minting of a token. A plain library jar: entity, persistence, control — NO
-         web/JAX-RS (that is `service`).
+         the minting of a token, and the accounts — users, roles, passkey rows, register tokens and
+         sessions. A plain library jar: entity, persistence, control — NO web/JAX-RS (that is
+         `service`). The WebAuthn ceremony itself is not here for exactly that reason: it takes a
+         RoutingContext and rides a cookie, so it lives at the boundary and hands its verified
+         result down.
 
          It owns its OWN named datasource + persistence unit + Flyway lineage — a postgres database
          of its own, provisioned for this application and handed to it as the generic resource
@@ -66,6 +69,18 @@
                  the domain module knows anything about JWT at all. -->
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-smallrye-jwt-build</artifactId>
+        </dependency>
+        <dependency>
+            <!-- BcryptUtil, and nothing else from this jar. A user's password is the one credential
+                 here that a HUMAN chose, so it is the one the plain SHA-256 argument in ClientSecret
+                 does not cover — see PasswordHash for the whole of it.
+
+                 It is a dependency of the DOMAIN module rather than `service` because hashing a
+                 password is not a web concern: it happens in `control`, beside the store that holds
+                 the result. The extension brings elytron's bcrypt implementation and no web stack,
+                 so the rule this module keeps — no JAX-RS, no HTTP — is untouched. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-elytron-security-common</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>

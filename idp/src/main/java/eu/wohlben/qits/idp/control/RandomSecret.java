@@ -1,0 +1,43 @@
+package eu.wohlben.qits.idp.control;
+
+import java.security.SecureRandom;
+import java.util.Base64;
+
+/**
+ * Unguessable bytes, base64url — the one place this service generates a credential value.
+ *
+ * <p>Three things are minted here and all three are the same problem: a commissioned client's
+ * secret, a register token, and a session's cookie value. Each is random and nothing else: there is
+ * no structure to parse, no id encoded in it, and no way to recognise a valid one without asking
+ * the store.
+ *
+ * <p><b>The generator is constructed per call and must never become a static field.</b> A {@code
+ * SecureRandom} held in a static is instantiated during native-image generation and lands in the
+ * image heap with its seed baked in — every deployment of that binary would then mint the same
+ * secrets. GraalVM refuses to build it, which is how this was caught here rather than shipped
+ * (measured 2026-08-14, {@code DynamicClients} was written that way first). None of these is a hot
+ * path, so constructing one costs nothing worth the risk.
+ */
+public final class RandomSecret {
+
+  /**
+   * How many bytes a credential value gets. 256 bits, which is what makes guessing hopeless and
+   * therefore what lets the store hold a plain SHA-256 of it rather than a password hash — the
+   * argument is written out in {@link ClientSecret}.
+   */
+  public static final int CREDENTIAL_BYTES = 32;
+
+  private RandomSecret() {}
+
+  /** A 256-bit credential value: a session cookie's contents, a register token, a client secret. */
+  public static String credential() {
+    return bytes(CREDENTIAL_BYTES);
+  }
+
+  /** {@code count} random bytes, base64url, unpadded. */
+  public static String bytes(int count) {
+    byte[] value = new byte[count];
+    new SecureRandom().nextBytes(value);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(value);
+  }
+}

@@ -7,20 +7,24 @@
     <parent>
         <groupId>eu.wohlben.qits</groupId>
         <artifactId>qits-idp</artifactId>
-        <version>2026.814.122135</version>
+        <version>2026.814.191019</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <!-- The idp HTTP boundary: `eu.wohlben.qits.idp.api` — the discovery document, the JWKS, and
-         the token endpoint. Everything below it (keys, clients, minting) is `qits-idp-domain`.
+    <!-- The idp HTTP boundary: `eu.wohlben.qits.idp.api` — the discovery document, the JWKS, the
+         token endpoint, the commission API, and the user surface (register, login, logout,
+         password, session introspection, register-token minting). Everything below it (keys,
+         clients, minting, accounts, sessions) is `qits-idp-domain`. This module also carries the
+         client: Quinoa builds the SPA submodule at src/main/webui during augmentation and serves it
+         at /idp/.
 
          A DEPLOYABLE APP, not a library JAR — <packaging>quarkus</packaging> binds augmentation
          into the lifecycle so it cannot be silently misplaced (the migration-deployables-plan.md
          reasoning, verbatim from the siblings).
 
-         NEVER let quarkus-undertow onto this classpath — the sibling rule, kept even though this
-         service serves no client today; phase 3 adds one and the check must not have to be
-         rediscovered then. -->
+         NEVER let quarkus-undertow onto this classpath. It was the sibling rule kept on principle
+         while there was no client; now it is load-bearing here too — see the quinoa dependency
+         below. -->
     <artifactId>qits-idp-service</artifactId>
     <name>qits-idp :: service</name>
     <packaging>quarkus</packaging>
@@ -54,8 +58,53 @@
             <artifactId>quarkus-rest-jackson</artifactId>
         </dependency>
         <dependency>
+            <!-- The idp client. Quinoa runs the npm build in src/main/webui (the
+                 qits-platform-spa-idp submodule) during augmentation and serves the result as
+                 static resources at /idp/ — see the quarkus.quinoa.* block in
+                 application.properties. Version from the root pom's dependencyManagement.
+
+                 IT IS WHY quarkus-undertow MUST STAY OUT. Quinoa's production static serving goes
+                 through Quarkus' own static-resource route, which undertow's servlet stack takes
+                 over and then cannot find — a packaged process that answers the protocol correctly
+                 and the SPA with a 404. Nothing here needs a servlet: the whole surface is
+                 quarkus-rest. Check `dependency:tree` before adding anything that sounds like a web
+                 framework. -->
+            <groupId>io.quarkiverse.quinoa</groupId>
+            <artifactId>quarkus-quinoa</artifactId>
+        </dependency>
+        <dependency>
+            <!-- The WebAuthn ceremony: challenge generation, attestation and assertion verification,
+                 webauthn4j underneath. In quarkus-bom, so no version here.
+
+                 THIS SERVICE USES IT AS A LIBRARY, NOT AS A LOGIN. WebAuthnSecurity is called
+                 programmatically from IdpAuthController and the idp issues its OWN opaque session;
+                 the extension's own `quarkus-credential` cookie is never written, because
+                 rememberUser() is never called. Its two built-in POST endpoints stay off (their
+                 defaults, restated in application.properties) — they would register and log in on
+                 their own terms, with no register token and no idp session.
+
+                 It belongs to `service` and not to the domain jar because it is a web stack: it
+                 depends on quarkus-vertx-http, its ceremony calls take a RoutingContext, and the
+                 challenge it issues rides a cookie. The store behind it is the domain's; the bridge
+                 between the two is WebAuthnCredentials in this module. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-security-webauthn</artifactId>
+        </dependency>
+        <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- WebAuthnHardware: an emulated authenticator that produces real attestations and real
+                 assertions with a real EC keypair. It is what lets the @QuarkusTest suite run the
+                 whole ceremony — the alternative would be recorded fixtures, which stop being valid
+                 the moment a challenge is random, which it is.
+
+                 Note it hard-codes `localhost` as the relying party it hashes into its authenticator
+                 data, which is why the suite's rp id has to be that and is. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-security-webauthn</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
