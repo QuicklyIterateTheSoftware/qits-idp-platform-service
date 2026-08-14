@@ -15,10 +15,15 @@
          are `idp/` and `service/`; the coordinates are namespaced (`eu.wohlben.qits:qits-idp-*`) so
          generic module names cannot collide in a shared ~/.m2.
 
-         WHAT THE SIBLINGS HAVE AND THIS DOES NOT: no Quinoa, no Lombok, no MapStruct. This service
-         serves no client in phase 1 (so `./mvnw verify` needs neither node nor a webui submodule),
-         and it has no DTO layer worth a mapper — its whole output is two JSON documents and a JWT.
-         Each comes back the day something here needs it, not before. -->
+         THE CLIENT EXISTS NOW, so Quinoa is here: qits-platform-spa-idp is a submodule at
+         service/src/main/webui and Quinoa builds it during `package` and serves it at /idp/. That
+         makes `./mvnw verify` need BOTH a node on PATH and an initialised submodule — `verify` runs
+         `package` on its way to failsafe, and an empty webui/ stops it at "No package.json found in
+         Web UI directory". `./mvnw test` still needs neither, because Quinoa is off in test mode.
+
+         WHAT THE SIBLINGS HAVE AND THIS STILL DOES NOT: no Lombok, no MapStruct. There is no DTO
+         layer worth a mapper — the whole output is two JSON documents, a JWT and a small commission
+         API. Each comes back the day something here needs it, not before. -->
     <groupId>eu.wohlben.qits</groupId>
     <artifactId>qits-idp</artifactId>
     <version>2026.814.122135</version>
@@ -48,6 +53,14 @@
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.version>3.34.6</quarkus.platform.version>
+
+        <!-- Quinoa is a Quarkiverse extension: not in quarkus-bom, and its version does NOT track
+             the platform's. 2.8.2 is built against Quarkus 3.27.3 LTS — older than the 3.34.6
+             above, which is the direction that works, since an extension compiled against an older
+             core runs on a newer one. 2.8.3 is built against 3.36.2 and would be an extension
+             asking this core for API it may not have. Bump it only past a platform bump. Same pin
+             as qits-platform-mirror and every other SPA-serving service. -->
+        <quinoa.version>2.8.2</quinoa.version>
 
         <!-- Embedded PostgreSQL for the suite. The signing keys live in postgres now, so the tests
              that open the store have to run against one — and the first rule here is that a clone
@@ -123,6 +136,13 @@
                 <groupId>${project.groupId}</groupId>
                 <artifactId>qits-arch-rules</artifactId>
                 <version>${qits.arch-rules.version}</version>
+            </dependency>
+            <dependency>
+                <!-- Managed here rather than versioned at the use site because Quinoa is in no BOM;
+                     the pin and its reasoning stay in one place. -->
+                <groupId>io.quarkiverse.quinoa</groupId>
+                <artifactId>quarkus-quinoa</artifactId>
+                <version>${quinoa.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

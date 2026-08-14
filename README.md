@@ -20,6 +20,21 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 | `GET /idp/api/clients` | the caller's own live commissions. |
 | `DELETE /idp/api/clients/{clientId}` | decommission one. |
 | `GET /idp/q/health/ready` | readiness, where the deployment convention expects it. |
+| `GET /idp/` | the client — four routes, `/idp/login`, `/idp/register`, `/idp/clients` and `/idp/users`. |
+
+### The client
+
+`qits-platform-spa-idp` (Angular) is a submodule at `service/src/main/webui`, and Quinoa builds it
+during `mvn package` and serves it from this process at `/idp/`.
+
+**The client and the protocol share one root**, which no sibling service does: everywhere else the
+REST surface is `/<segment>/api`, one level below the SPA. Here `quarkus.rest.path` is `/idp`
+itself, because OIDC fixes where a consumer looks. So `quarkus.quinoa.ignored-path-prefixes` names
+the whole machine surface — `/api,/q,/.well-known,/token,/jwks`, matched after `/idp` is stripped —
+and it is the only thing keeping a mistyped protocol path from being answered with the page. The
+reasoning is in `service/src/main/resources/application.properties`, the proof in
+`IdpPackagedSurfaceIT`, and the rule is that a new literal route lands with its prefix entry in the
+same commit.
 
 A token request authenticates with `client_secret_basic` **or** `client_secret_post`, never both,
 and may name an `audience` (repeated or whitespace-separated). Naming none asks for every audience
@@ -143,8 +158,18 @@ retire the old one, and both keep being published until the old one's tokens hav
 
 ## Building and running
 
-`./mvnw verify` on a clone is the gate — no monorepo, no docker, no prior install, no node. The
-suite takes a free port (`service/src/test/resources/application.properties` sets
+`./mvnw verify` on a clone is the gate — no monorepo, no docker, no prior install. It does need two
+things a clone alone does not have: **the client submodule and a node**.
+
+    git submodule update --init      # service/src/main/webui, or the build stops at
+                                     # "No package.json found in Web UI directory"
+
+Node must be on `PATH` at the platform's pin or newer (22.22.0), because `verify` runs `package` and
+Quinoa shells out to the host's npm. Nothing downloads a toolchain for you — that is deliberate, and
+the fix for a machine with no node is node, not a config key. `./mvnw test` still needs neither, as
+Quinoa is disabled in test mode.
+
+The suite takes a free port (`service/src/test/resources/application.properties` sets
 `quarkus.http.test-port=0`), because on the deployment host 8081 is the platform's npm registry.
 
     ./mvnw verify                    # the @QuarkusTest suite

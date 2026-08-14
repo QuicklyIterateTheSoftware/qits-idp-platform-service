@@ -6,10 +6,15 @@ from. This file is the working conventions on top of it.
 ## The rules that shape everything
 
 **A clone of this repo alone builds and tests green** — no monorepo, no docker, no prior
-`mvn install` elsewhere, no credentials, and (unlike every sibling) no node either: this service
-serves no client in phase 1, so there is no Quinoa and no webui submodule. `./mvnw verify` is the
-gate, and it needs no port argument — `service/src/test/resources/application.properties` sets
-`quarkus.http.test-port=0`.
+`mvn install` elsewhere, no credentials. `./mvnw verify` is the gate, and it needs no port
+argument — `service/src/test/resources/application.properties` sets `quarkus.http.test-port=0`.
+
+**Clone-alone now means clone *and* `git submodule update --init`, plus a node on `PATH`.** This
+service serves a client: `qits-platform-spa-idp` at `service/src/main/webui`, built by Quinoa during
+`package` and served at `/idp/`. `verify` runs `package`, so both are required — an uninitialised
+submodule is an empty directory and stops the build at "No package.json found in Web UI directory".
+`./mvnw test` needs neither, because Quinoa is disabled in test mode, which is also why nothing
+about the client can be proven by a `@QuarkusTest` (see `IdpPackagedSurfaceIT`).
 
 **The one thing it now needs besides Maven Central** is the platform's own Maven repository, for
 `qits-db-core` and `qits-arch-rules` — the patient driver every connection opens through, and the
@@ -126,6 +131,14 @@ every OIDC client computes. The commission API takes `@Path("/api/clients")` rel
 this — `/idp/api/clients` — which keeps the machine-admin surface separate without moving the
 protocol.
 
+**That departure is what makes `quarkus.quinoa.ignored-path-prefixes` load-bearing here.** The
+client mounts at `/idp/` like every sibling's, but because the REST surface is the segment rather
+than `/idp/api`, the protocol routes sit directly beside the SPA's own. The SPA fallback answers any
+unmatched path under `/idp` with `200 text/html`, so the list — `/api,/q,/.well-known,/token,/jwks`,
+**relative**, matched after `/idp` is stripped — is the whole of what keeps a mistyped protocol path
+a 404. Get it wrong and an OIDC consumer caches a page as its discovery document. Adding a literal
+route means adding its entry and its `IdpPackagedSurfaceIT` case in the same commit.
+
 The issuer string is spelled **once**, in `qits.idp.issuer`, and `Issuer` normalises it. The
 discovery document's `token_endpoint` and `jwks_uri` are derived from it, and so is every token's
 `iss`. Never configure an endpoint separately: a consumer rejects a token whose `iss` differs from
@@ -238,4 +251,7 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   needs reflection registration, SHA-256 needs a JCA provider, and the table only exists if `V2`
   survived the packaging. Its embedded postgres reaches the profile through a **system property**, because
   a `QuarkusTestProfile` is instantiated in two classloaders and a static field is not shared
-  between them.
+  between them. **The client's probes are here for the same reason** — Quinoa is off in test mode,
+  so `/idp/` is served by nothing during the `@QuarkusTest` suite: that the page arrives with the
+  matching `<base href>`, that a deep link falls back to it, and that every ignored prefix answers
+  404 rather than HTML are all packaged-only facts.
