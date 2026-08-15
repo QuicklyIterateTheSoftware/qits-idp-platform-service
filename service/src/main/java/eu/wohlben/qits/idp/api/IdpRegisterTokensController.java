@@ -65,7 +65,10 @@ public class IdpRegisterTokensController {
   public RestResponse<MintResponse> mint(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization) {
     IdpClient client =
-        caller.staticOnly(authorization, "a commissioned client may not mint register tokens");
+        caller.staticOnly(
+            authorization,
+            "a commissioned client may not mint register tokens",
+            BasicCaller.PLATFORM_SYSTEM);
     Minted minted = tokens.mint(client.clientId());
     return RestResponse.ResponseBuilder.create(
             Response.Status.CREATED,

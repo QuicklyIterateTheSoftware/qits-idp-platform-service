@@ -86,6 +86,7 @@ public class ClientRegistry {
         stored.clientId(),
         ClientSecret.stored(stored.secretHash()),
         owner == null ? List.of() : owner.audiences(),
+        owner == null ? List.of() : owner.roles(),
         owner == null ? Map.of() : owner.claims());
   }
 }

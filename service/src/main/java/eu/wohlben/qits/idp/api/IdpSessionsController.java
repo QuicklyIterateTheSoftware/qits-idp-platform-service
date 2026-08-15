@@ -67,7 +67,10 @@ public class IdpSessionsController {
   @Consumes(MediaType.APPLICATION_JSON)
   public RestResponse<SessionView> introspect(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization, IntrospectRequest request) {
-    caller.staticOnly(authorization, "a commissioned client may not introspect sessions");
+    caller.staticOnly(
+        authorization,
+        "a commissioned client may not introspect sessions",
+        BasicCaller.PLATFORM_SYSTEM);
     if (request == null || request.token() == null || request.token().isBlank()) {
       throw OAuthException.invalidRequest("a JSON body naming the session token is required");
     }

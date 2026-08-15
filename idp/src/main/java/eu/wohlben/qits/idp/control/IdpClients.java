@@ -53,6 +53,7 @@ public class IdpClients {
             ClientSecret.configured(
                 config.getOptionalValue(prefix + "secret", String.class).orElse(null)),
             config.getOptionalValues(prefix + "audiences", String.class).orElse(List.of()),
+            config.getOptionalValues(prefix + "roles", String.class).orElse(List.of()),
             claims(prefix)));
   }
 

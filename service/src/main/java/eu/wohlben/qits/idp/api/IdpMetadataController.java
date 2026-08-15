@@ -46,15 +46,14 @@ public class IdpMetadataController {
     // the consumer, and member order is what makes it scannable.
     Map<String, Object> document = new LinkedHashMap<>();
     document.put("issuer", issuer.url());
+    document.put("authorization_endpoint", issuer.authorizationEndpoint());
     document.put("token_endpoint", issuer.tokenEndpoint());
     document.put("jwks_uri", issuer.jwksUri());
-    document.put("grant_types_supported", List.of("client_credentials"));
+    document.put("grant_types_supported", List.of("client_credentials", "authorization_code", "refresh_token"));
     document.put(
         "token_endpoint_auth_methods_supported",
-        List.of("client_secret_basic", "client_secret_post"));
-    // No response type is supported: there is no authorization endpoint to return one from. An
-    // empty array says so, where omitting the member would read as "not documented".
-    document.put("response_types_supported", List.of());
+        List.of("client_secret_basic", "client_secret_post", "none"));
+    document.put("response_types_supported", List.of("code"));
     document.put("subject_types_supported", List.of("public"));
     // OIDC names this member for id_tokens, which this service does not issue; it is the algorithm
     // of the access tokens it does issue, and consumers read it as the signing alg either way.
@@ -72,7 +71,18 @@ public class IdpMetadataController {
 
   /** The registered claims every token carries, plus the structured ones a client may be granted. */
   private static List<String> claimsSupported() {
-    List<String> claims = new ArrayList<>(List.of("iss", "sub", "aud", "exp", "iat", "jti"));
+    List<String> claims =
+        new ArrayList<>(
+            List.of(
+                "iss",
+                "sub",
+                "aud",
+                "groups",
+                "exp",
+                "iat",
+                "jti",
+                "credential_type",
+                "git_ref_pattern"));
     claims.addAll(ClaimNames.GRANTABLE);
     return List.copyOf(claims);
   }

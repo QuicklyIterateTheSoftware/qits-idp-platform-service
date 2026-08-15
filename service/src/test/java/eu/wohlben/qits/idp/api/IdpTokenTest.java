@@ -54,6 +54,9 @@ public class IdpTokenTest {
     assertEquals("test-broad", claims.getSubject());
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
     assertEquals(List.of("prod-qits-deployments"), PublishedJwks.audienceOf(claims));
+    assertEquals(
+        List.of("qits:system", "qits-platform:system"),
+        claims.getStringListClaimValue("groups"));
     assertNotNull(claims.getIssuedAt(), "iat");
     assertEquals(
         3600,

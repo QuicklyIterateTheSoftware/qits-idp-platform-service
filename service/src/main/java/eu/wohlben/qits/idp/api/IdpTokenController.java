@@ -2,6 +2,7 @@ package eu.wohlben.qits.idp.api;
 
 import eu.wohlben.qits.idp.control.TokenService;
 import eu.wohlben.qits.idp.control.TokenService.IssuedToken;
+import eu.wohlben.qits.idp.control.WorkstationCredentials;
 import eu.wohlben.qits.idp.error.OAuthException;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -34,8 +35,15 @@ import java.util.Map;
 public class IdpTokenController {
 
   private static final String GRANT_CLIENT_CREDENTIALS = "client_credentials";
+  private static final String GRANT_AUTHORIZATION_CODE = "authorization_code";
+  private static final String GRANT_REFRESH_TOKEN = "refresh_token";
 
   @Inject TokenService tokenService;
+
+  @Inject WorkstationCredentials workstations;
+
+  @org.eclipse.microprofile.config.inject.ConfigProperty(name = "qits.idp.workstation.client-id")
+  String workstationClientId;
 
   /**
    * Client authentication is {@code client_secret_basic} or {@code client_secret_post}, never both
@@ -53,30 +61,62 @@ public class IdpTokenController {
       @FormParam("grant_type") String grantType,
       @FormParam("client_id") String clientIdParam,
       @FormParam("client_secret") String clientSecretParam,
-      @FormParam("audience") List<String> audienceParams) {
+      @FormParam("audience") List<String> audienceParams,
+      @FormParam("code") String code,
+      @FormParam("redirect_uri") String redirectUri,
+      @FormParam("code_verifier") String codeVerifier,
+      @FormParam("refresh_token") String refreshToken) {
 
     if (grantType == null || grantType.isBlank()) {
       throw OAuthException.invalidRequest("grant_type is required");
     }
+    if (GRANT_AUTHORIZATION_CODE.equals(grantType)) {
+      publicClient(clientIdParam, clientSecretParam, authorization);
+      WorkstationCredentials.RefreshGrant grant =
+          workstations.exchangeCode(code, redirectUri, codeVerifier);
+      return tokenResponse(tokenService.workstation(grant.userId()), grant.refreshToken());
+    }
+    if (GRANT_REFRESH_TOKEN.equals(grantType)) {
+      publicClient(clientIdParam, clientSecretParam, authorization);
+      WorkstationCredentials.RefreshGrant grant = workstations.refresh(refreshToken);
+      return tokenResponse(tokenService.workstation(grant.userId()), grant.refreshToken());
+    }
     if (!GRANT_CLIENT_CREDENTIALS.equals(grantType)) {
-      throw OAuthException.unsupportedGrantType("only client_credentials is supported");
+      throw OAuthException.unsupportedGrantType(
+          "supported grants are client_credentials, authorization_code, and refresh_token");
     }
 
     BasicCredentials credentials = credentials(authorization, clientIdParam, clientSecretParam);
-    IssuedToken issued =
+    return tokenResponse(
         tokenService.clientCredentials(
-            credentials.clientId(), credentials.secret(), audiences(audienceParams));
+            credentials.clientId(), credentials.secret(), audiences(audienceParams)), null);
+  }
 
+  /** RFC 6749 §5.1 response, with a refresh token only for the workstation grants. */
+  private static Response tokenResponse(IssuedToken issued, String refreshToken) {
     // LinkedHashMap so the response reads in the order RFC 6749 §5.1 lists the members.
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("access_token", issued.accessToken());
     body.put("token_type", "Bearer");
     body.put("expires_in", issued.expiresInSeconds());
+    if (refreshToken != null) {
+      body.put("refresh_token", refreshToken);
+    }
     return Response.ok(body)
         // RFC 6749 §5.1: a token response is never cached, anywhere.
         .header(HttpHeaders.CACHE_CONTROL, "no-store")
         .header("Pragma", "no-cache")
         .build();
+  }
+
+  /** The public workstation client authenticates by PKCE, never by an empty or shared secret. */
+  private void publicClient(String clientId, String secret, String authorization) {
+    if (authorization != null && !authorization.isBlank()) {
+      throw OAuthException.invalidRequest("the workstation public client must not use Authorization");
+    }
+    if (clientId == null || !workstationClientId.equals(clientId) || (secret != null && !secret.isBlank())) {
+      throw OAuthException.invalidClient("the workstation public client is required");
+    }
   }
 
   /**

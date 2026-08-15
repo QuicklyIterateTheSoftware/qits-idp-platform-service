@@ -218,19 +218,17 @@ public class IdpAuthController {
   /**
    * End the session and clear the cookie.
    *
-   * <p>Always 204, and always with the clearing cookie — <b>logging out twice is not an error</b>,
-   * and neither is logging out with a session that already expired. The browser's job here is to
-   * end up without a cookie, and telling it "there was nothing to end" would only leave a client
-   * deciding what to do about it. There is no {@code @Consumes}: this call has no body, and a POST
-   * with no {@code Content-Type} would not match a JSON one.
+   * <p>A live session is required. This endpoint mutates session state and is not part of the
+   * anonymous login/register bootstrap surface. There is no {@code @Consumes}: this call has no
+   * body, and a POST with no {@code Content-Type} would not match a JSON one.
    */
   @POST
   @Path("/logout")
   public Response logout(
       @Context RoutingContext ctx, @CookieParam(SessionCookie.NAME) String sessionToken) {
-    if (sessions.revoke(sessionToken)) {
-      LOG.info("a session was ended by its holder");
-    }
+    requireSession(sessionToken);
+    sessions.revoke(sessionToken);
+    LOG.info("a session was ended by its holder");
     return Response.noContent()
         .header(HttpHeaders.SET_COOKIE, SessionCookie.clear(SessionCookie.isSecure(ctx)))
         .build();

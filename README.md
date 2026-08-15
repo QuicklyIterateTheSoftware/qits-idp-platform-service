@@ -22,7 +22,8 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 |---|---|
 | `GET /idp/.well-known/openid-configuration` | discovery. An OIDC consumer configured with auth-server-url `http://qits-platform-idp:8080/idp` derives this URL itself. |
 | `GET /idp/jwks` | the public signing keys, each with its `kid`. |
-| `POST /idp/token` | `application/x-www-form-urlencoded`, `grant_type=client_credentials`. |
+| `GET /idp/authorize` | signed-in browser approval for the local Git workstation's Authorization Code + PKCE flow. |
+| `POST /idp/token` | `application/x-www-form-urlencoded`: `client_credentials`, workstation `authorization_code`, or rotating workstation `refresh_token`. |
 | `POST /idp/api/clients` | commission a credential for one dynamic context. |
 | `GET /idp/api/clients` | the caller's own live commissions. |
 | `DELETE /idp/api/clients/{clientId}` | decommission one. |
@@ -34,6 +35,8 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 | `POST /idp/api/auth/password` | set or replace the signed-in account's password. |
 | `POST /idp/api/sessions/introspect` | what the edge asks a cookie about. Basic, static client. |
 | `POST /idp/api/register-tokens` | mint a one-time register token. Basic, static client. |
+| `GET /idp/api/workstations` | the signed-in user's revocable Git workstation credentials. |
+| `DELETE /idp/api/workstations/{familyId}` | revoke one signed-in user's workstation refresh-token family. |
 | `GET /idp/q/health/ready` | readiness, where the deployment convention expects it. |
 | `GET /idp/` | the client — four routes, `/idp/login`, `/idp/register`, `/idp/clients` and `/idp/users`. |
 
@@ -76,6 +79,21 @@ resource service decides what a value permits, including whether `*` means "any"
 
 Refusals are RFC 6749 §5.2: `invalid_client` (401, with a `WWW-Authenticate` challenge),
 `invalid_request` / `unsupported_grant_type` / `invalid_target` (400).
+
+### Local Git workstations
+
+`qits login` uses a public OAuth client, `qits-git-workstation`, rather than receiving a service
+credential. It starts `GET /idp/authorize` in the browser with `response_type=code`, an S256 PKCE
+challenge, the fixed githost audience and an exact `http://127.0.0.1:<ephemeral-port>/…` callback.
+The browser must already hold a `qits-session`; approval returns a two-minute, one-use code to that
+loopback listener. Exchanging it at `/token` returns a fifteen-minute access token and a rotating,
+opaque refresh token. Refresh-token replay revokes the entire family, and the account can revoke a
+family through `/api/workstations`.
+
+The access token is deliberately not the user's ordinary administrator identity: it has
+`groups=["qits:git:external"]`, `credential_type=workstation`,
+`git_ref_pattern=refs/heads/external/*`, and only the configured githost audience. The githost must
+enforce that ref pattern for every update; no workstation token has `qits:system`.
 
 ## Clients
 

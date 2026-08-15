@@ -21,7 +21,11 @@ import java.util.Map;
  * @param claims granted claims, copied into the token verbatim
  */
 public record IdpClient(
-    String clientId, ClientSecret secret, List<String> audiences, Map<String, String> claims) {
+    String clientId,
+    ClientSecret secret,
+    List<String> audiences,
+    List<String> roles,
+    Map<String, String> claims) {
 
   /**
    * Whether this client can authenticate at all.

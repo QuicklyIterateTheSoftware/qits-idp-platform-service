@@ -99,7 +99,10 @@ public class IdpClientsController {
   public RestResponse<CommissionResponse> commission(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization, CommissionRequest request) {
     IdpClient owner =
-        caller.staticOnly(authorization, "a commissioned client may not commission another");
+        caller.staticOnly(
+            authorization,
+            "a commissioned client may not commission another",
+            BasicCaller.PLATFORM_SYSTEM);
     if (request == null) {
       throw OAuthException.invalidRequest(
           "a JSON body naming contextKind and contextId is required");
@@ -133,7 +136,8 @@ public class IdpClientsController {
    */
   @GET
   public List<CommissionView> list(@HeaderParam(HttpHeaders.AUTHORIZATION) String authorization) {
-    IdpClient owner = caller.authenticated(authorization);
+    IdpClient owner =
+        caller.requireRole(caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM);
     return dynamicClients.listOwnedBy(owner.clientId()).stream()
         .map(
             client ->
@@ -162,7 +166,8 @@ public class IdpClientsController {
   public Response decommission(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
       @PathParam("clientId") String clientId) {
-    IdpClient owner = caller.authenticated(authorization);
+    IdpClient owner =
+        caller.requireRole(caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM);
     if (!dynamicClients.decommission(clientId, owner.clientId())) {
       throw OAuthException.notFound("no such commissioned client");
     }

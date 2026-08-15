@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -39,6 +40,14 @@ public class TokenService {
   @ConfigProperty(name = "qits.idp.token-ttl-seconds")
   long tokenTtlSeconds;
 
+  /** Workstation access tokens deliberately live far less long than service credentials. */
+  @ConfigProperty(name = "qits.idp.workstation.access-token-ttl-seconds")
+  long workstationAccessTokenTtlSeconds;
+
+  /** The one resource a workstation public client may ever target. */
+  @ConfigProperty(name = "qits.idp.workstation.githost-audience")
+  String workstationGithostAudience;
+
   @Inject SigningKeys signingKeys;
 
   @Inject ClientRegistry clients;
@@ -66,6 +75,7 @@ public class TokenService {
             // A Set, so `aud` is always a JSON array — one shape for consumers to read whether the
             // token names one audience or four.
             .audience(new LinkedHashSet<>(audiences))
+            .groups(new LinkedHashSet<>(client.roles()))
             .issuedAt(now)
             .expiresAt(now.plusSeconds(tokenTtlSeconds));
     // The granted claims, verbatim. The idp does not interpret these values.
@@ -73,6 +83,31 @@ public class TokenService {
 
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
     return new IssuedToken(jwt, tokenTtlSeconds, audiences);
+  }
+
+  /**
+   * Mint the constrained user-approved credential used by a local Git workstation.
+   *
+   * <p>This does not copy the user's ordinary admin roles. A workstation is intentionally a
+   * different capability: the resource sees one external-Git role and a ref pattern claim, and
+   * must reject every ref outside that pattern. The audience is fixed in configuration rather than
+   * accepted from the public client, so this token can never be replayed at another service.
+   */
+  public IssuedToken workstation(UUID userId) {
+    Instant now = Instant.now();
+    SigningKey key = signingKeys.signing();
+    JwtClaimsBuilder token =
+        Jwt.claims()
+            .issuer(issuer.url())
+            .subject(userId.toString())
+            .audience(Set.of(workstationGithostAudience))
+            .groups(Set.of("qits:git:external"))
+            .claim("credential_type", "workstation")
+            .claim("git_ref_pattern", "refs/heads/external/*")
+            .issuedAt(now)
+            .expiresAt(now.plusSeconds(workstationAccessTokenTtlSeconds));
+    String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
+    return new IssuedToken(jwt, workstationAccessTokenTtlSeconds, List.of(workstationGithostAudience));
   }
 
   /**

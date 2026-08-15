@@ -31,14 +31,26 @@ public class IdpMetadataTest {
         .body("issuer", equalTo(PublishedJwks.ISSUER))
         .body("token_endpoint", equalTo(PublishedJwks.ISSUER + "/token"))
         .body("jwks_uri", equalTo(PublishedJwks.ISSUER + "/jwks"))
-        .body("grant_types_supported", contains("client_credentials"))
+        .body(
+            "grant_types_supported",
+            contains("client_credentials", "authorization_code", "refresh_token"))
         .body(
             "token_endpoint_auth_methods_supported",
-            containsInAnyOrder("client_secret_basic", "client_secret_post"))
+            containsInAnyOrder("client_secret_basic", "client_secret_post", "none"))
         .body("id_token_signing_alg_values_supported", contains("RS256"))
-        .body("claims_supported", hasItems("iss", "sub", "aud", "project", "workspace", "branch"))
-        // Phase 3's browser half is not here yet, and the document must not claim otherwise.
-        .body("authorization_endpoint", nullValue())
+        .body(
+            "claims_supported",
+            hasItems(
+                "iss",
+                "sub",
+                "aud",
+                "groups",
+                "project",
+                "workspace",
+                "branch",
+                "credential_type",
+                "git_ref_pattern"))
+        .body("authorization_endpoint", equalTo(PublishedJwks.ISSUER + "/authorize"))
         .body("userinfo_endpoint", nullValue());
   }
 

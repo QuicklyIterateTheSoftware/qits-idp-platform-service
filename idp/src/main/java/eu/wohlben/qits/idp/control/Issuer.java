@@ -31,6 +31,11 @@ public class Issuer {
     return url() + "/token";
   }
 
+  /** {@code <issuer>/authorize} — the Git workstation's Authorization Code + PKCE browser leg. */
+  public String authorizationEndpoint() {
+    return url() + "/authorize";
+  }
+
   /** {@code <issuer>/jwks} — derived, never separately configured. */
   public String jwksUri() {
     return url() + "/jwks";

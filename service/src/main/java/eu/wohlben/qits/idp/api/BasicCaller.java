@@ -27,6 +27,8 @@ import jakarta.inject.Inject;
 @ApplicationScoped
 public class BasicCaller {
 
+  public static final String PLATFORM_SYSTEM = "qits-platform:system";
+
   @Inject ClientRegistry registry;
 
   /**
@@ -56,5 +58,18 @@ public class BasicCaller {
       throw OAuthException.accessDenied(refusal);
     }
     return caller;
+  }
+
+  /** Require one machine role after the Basic pair has authenticated. */
+  public IdpClient requireRole(IdpClient caller, String role) {
+    if (!caller.roles().contains(role)) {
+      throw OAuthException.accessDenied("the client lacks role " + role);
+    }
+    return caller;
+  }
+
+  /** Authenticate a configured service client and require its machine role. */
+  public IdpClient staticOnly(String authorization, String refusal, String role) {
+    return requireRole(staticOnly(authorization, refusal), role);
   }
 }
