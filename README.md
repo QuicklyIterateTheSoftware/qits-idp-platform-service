@@ -210,11 +210,19 @@ automated callers and for the one browsing route with no secure context (see bel
 `POST /idp/api/auth/login-options` then `.../login` with the assertion, or one `.../login` with
 `{username, password}`. Either way the answer is the same four fields and a cookie:
 
-    Set-Cookie: qits-session=<43 chars>; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax
+    Set-Cookie: qits-session=<43 chars>; Path=/; Domain=wohlben.eu; Max-Age=43200; HttpOnly; SameSite=Lax
 
-`Secure` is appended when the request — or `X-Forwarded-Proto` — says https. There is no `Domain`,
-so the cookie is host-only. `Path=/` because the cookie is for the **edge**, which introspects it on
-requests to every segment, not for this service.
+`Secure` is appended when the request — or `X-Forwarded-Proto` — says https. A domain bootstrap
+sets `Domain=<parent domain>` so the apex and explicitly configured browser environment hosts share
+one login; localhost leaves it host-only. `Path=/` because the cookie is for the **edge**, which
+introspects it on requests to every segment, not for this service. The edge removes this named
+cookie before proxying to machine-only registry, mirror, and git-host vhosts.
+
+WebAuthn still runs only at the canonical apex origin. An unauthenticated environment navigation is
+sent there with a return authority and path; after login or registration the SPA asks
+`GET /idp/api/auth/return-location`. This service validates the authority against its configured
+browser-host allow-list and returns an absolute location. A public query string therefore cannot
+turn the login page into an open redirect.
 
 The value is 256 random bits and nothing else. This store holds a `sha-256:` fingerprint of it, so a
 dump of the idp's database logs nobody in, and the only way to learn anything from a cookie is

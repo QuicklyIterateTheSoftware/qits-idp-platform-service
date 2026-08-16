@@ -173,6 +173,36 @@ public class UserAuthenticationTest {
     assertEquals(43, value.length(), "32 bytes, base64url, unpadded: " + value);
   }
 
+  @Test
+  public void aConfiguredParentCookieDomainIsRepeatedWhenTheSessionIsCleared() {
+    String opened = SessionCookie.set("opaque", java.time.Duration.ofHours(12), true, "wohlben.eu");
+    String cleared = SessionCookie.clear(true, "wohlben.eu");
+    assertTrue(opened.contains("; Domain=wohlben.eu"), opened);
+    assertTrue(cleared.contains("; Domain=wohlben.eu"), cleared);
+    assertTrue(opened.contains("; Secure"), opened);
+    assertTrue(cleared.contains("; Max-Age=0"), cleared);
+  }
+
+  @Test
+  public void theIdpResolvesBrowserReturnsOnlyToConfiguredAuthorities() {
+    given()
+        .queryParam("return_host", "localhost:8080")
+        .queryParam("return_path", "/projects/7?tab=runs")
+        .when()
+        .get("/idp/api/auth/return-location")
+        .then()
+        .statusCode(200)
+        .body("location", equalTo("http://localhost:8080/projects/7?tab=runs"));
+    given()
+        .queryParam("return_host", "evil.example")
+        .queryParam("return_path", "//evil.example/steal")
+        .when()
+        .get("/idp/api/auth/return-location")
+        .then()
+        .statusCode(200)
+        .body("location", equalTo("http://localhost:8080/"));
+  }
+
   // --- the register token -----------------------------------------------------------------------
 
   @Test

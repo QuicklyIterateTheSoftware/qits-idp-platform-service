@@ -12,7 +12,7 @@ import java.util.Locale;
  * is a decision somebody has to be able to read off one line, and the JAX-RS builder adds its own
  * ({@code Version=1}) and hides the rest behind a fluent API. What goes on the wire is:
  *
- * <pre>qits-session=&lt;value&gt;; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax</pre>
+ * <pre>qits-session=&lt;value&gt;; Path=/; Domain=wohlben.eu; Max-Age=43200; HttpOnly; SameSite=Lax</pre>
  *
  * <p>with {@code ; Secure} appended over https. Attribute by attribute:
  *
@@ -31,9 +31,10 @@ import java.util.Locale;
  *       Unconditionally would break the developer host outright: {@code http://localhost:8080} is
  *       a secure context by browser rule, which is what makes passkeys work there with no TLS, but
  *       it is still plain http and a {@code Secure} cookie would simply never be stored.
- *   <li><b>No Domain</b> — host-only, so the cookie belongs to the one host the browser surfaces
- *       live on and is not offered to a sibling name. The app vhosts (registry, mirror, githost)
- *       are machine planes with credentials of their own and have no use for it.
+ *   <li><b>Domain, only when configured</b> — a public installation's session belongs to its
+ *       parent domain, so its browser-facing environment hosts share one login. The edge removes
+ *       it before proxying to machine vhosts. Local development leaves it blank and therefore
+ *       host-only, because {@code localhost} has no parent domain to share.
  *   <li><b>Max-Age</b> — the session's TTL, from the same value that stamps the row's deadline, so
  *       a browser never holds a cookie the store has already stopped honouring.
  * </ul>
@@ -49,7 +50,12 @@ public final class SessionCookie {
 
   /** The {@code Set-Cookie} line that opens a session. */
   public static String set(String value, Duration ttl, boolean secure) {
-    return line(value, ttl.toSeconds(), secure);
+    return set(value, ttl, secure, null);
+  }
+
+  /** The opening line, optionally scoped to one parent DNS domain. */
+  public static String set(String value, Duration ttl, boolean secure, String domain) {
+    return line(value, ttl.toSeconds(), secure, domain);
   }
 
   /**
@@ -59,7 +65,12 @@ public final class SessionCookie {
    * in place beside a new empty one.
    */
   public static String clear(boolean secure) {
-    return line("", 0, secure);
+    return clear(secure, null);
+  }
+
+  /** The clearing line uses the same domain as the opening line, or browsers retain the cookie. */
+  public static String clear(boolean secure, String domain) {
+    return line("", 0, secure, domain);
   }
 
   /**
@@ -87,9 +98,12 @@ public final class SessionCookie {
     return "https".equals(first);
   }
 
-  private static String line(String value, long maxAgeSeconds, boolean secure) {
+  private static String line(String value, long maxAgeSeconds, boolean secure, String domain) {
     StringBuilder cookie = new StringBuilder(NAME).append('=').append(value);
     cookie.append("; Path=/");
+    if (domain != null && !domain.isBlank()) {
+      cookie.append("; Domain=").append(domain);
+    }
     cookie.append("; Max-Age=").append(maxAgeSeconds);
     cookie.append("; HttpOnly");
     cookie.append("; SameSite=Lax");

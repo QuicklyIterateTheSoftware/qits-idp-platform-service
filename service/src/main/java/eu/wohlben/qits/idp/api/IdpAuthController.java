@@ -15,9 +15,11 @@ import io.vertx.ext.web.RoutingContext;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.CookieParam;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
@@ -111,6 +113,27 @@ public class IdpAuthController {
   @Inject Registrations registrations;
 
   @Inject Sessions sessions;
+
+  @Inject BrowserSso browserSso;
+
+  /** The one server-validated answer the SPA may use for its post-login document navigation. */
+  public record ReturnLocation(String location) {}
+
+  /**
+   * Resolve an edge-supplied browser return target.
+   *
+   * <p>This stays server-side rather than having the SPA compare a suffix: a public page can be
+   * linked with arbitrary query parameters, while this process owns the configured allow-list.
+   */
+  @GET
+  @Path("/return-location")
+  public RestResponse<ReturnLocation> returnLocation(
+      @QueryParam("return_host") String host, @QueryParam("return_path") String path) {
+    return RestResponse.ResponseBuilder.ok(new ReturnLocation(browserSso.returnLocation(host, path)))
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
+        .header("Pragma", "no-cache")
+        .build();
+  }
 
   /**
    * The WebAuthn creation options for a registration.
@@ -230,7 +253,9 @@ public class IdpAuthController {
     sessions.revoke(sessionToken);
     LOG.info("a session was ended by its holder");
     return Response.noContent()
-        .header(HttpHeaders.SET_COOKIE, SessionCookie.clear(SessionCookie.isSecure(ctx)))
+        .header(
+            HttpHeaders.SET_COOKIE,
+            SessionCookie.clear(SessionCookie.isSecure(ctx), browserSso.cookieDomain()))
         .build();
   }
 
@@ -346,7 +371,8 @@ public class IdpAuthController {
             Response.Status.OK, SessionView.of(opened.session()))
         .header(
             HttpHeaders.SET_COOKIE,
-            SessionCookie.set(opened.token(), sessions.ttl(), SessionCookie.isSecure(ctx)))
+            SessionCookie.set(
+                opened.token(), sessions.ttl(), SessionCookie.isSecure(ctx), browserSso.cookieDomain()))
         // The body describes a credential and the header IS one. Same rule as the token response.
         .header(HttpHeaders.CACHE_CONTROL, "no-store")
         .header("Pragma", "no-cache")
