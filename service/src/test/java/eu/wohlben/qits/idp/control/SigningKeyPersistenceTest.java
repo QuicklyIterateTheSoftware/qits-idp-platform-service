@@ -45,7 +45,7 @@ public class SigningKeyPersistenceTest {
         "the token minted before the reload names the key that is still active");
     // The whole point: what was issued before still verifies against what is published after.
     assertEquals(
-        "test-broad", PublishedJwks.verify(tokenBefore, "prod-qits-deployments").getSubject());
+        "test-broad", PublishedJwks.verify(tokenBefore, "qits-deployments").getSubject());
   }
 
   @Test
@@ -78,7 +78,7 @@ public class SigningKeyPersistenceTest {
             "grant_type=client_credentials"
                 + "&client_id=test-broad"
                 + "&client_secret=test-broad-secret"
-                + "&audience=prod-qits-deployments")
+                + "&audience=qits-deployments")
         .when()
         .post("/idp/token")
         .then()

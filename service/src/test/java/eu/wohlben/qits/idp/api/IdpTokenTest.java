@@ -38,7 +38,7 @@ public class IdpTokenTest {
         post("grant_type=client_credentials"
                 + "&client_id=test-broad"
                 + "&client_secret=test-broad-secret"
-                + "&audience=prod-qits-deployments")
+                + "&audience=qits-deployments")
             .statusCode(200)
             .body("token_type", equalTo("Bearer"))
             // The SHIPPED lifetime, raised to an hour on 2026-08-14 with the commission model.
@@ -50,10 +50,10 @@ public class IdpTokenTest {
             .extract()
             .path("access_token");
 
-    JwtClaims claims = PublishedJwks.verify(token, "prod-qits-deployments");
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals("test-broad", claims.getSubject());
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
-    assertEquals(List.of("prod-qits-deployments"), PublishedJwks.audienceOf(claims));
+    assertEquals(List.of("qits-deployments"), PublishedJwks.audienceOf(claims));
     assertEquals(
         List.of("qits:system", "qits-platform:system"),
         claims.getStringListClaimValue("groups"));
@@ -93,9 +93,9 @@ public class IdpTokenTest {
             .extract()
             .path("access_token");
 
-    JwtClaims claims = PublishedJwks.verify(token, "prod-qits-deployments");
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals(
-        List.of("prod-qits-ci", "prod-qits-deployments"), PublishedJwks.audienceOf(claims));
+        List.of("prod-qits-ci", "qits-deployments"), PublishedJwks.audienceOf(claims));
   }
 
   @Test
@@ -104,12 +104,12 @@ public class IdpTokenTest {
         post("grant_type=client_credentials"
                 + "&client_id=test-broad"
                 + "&client_secret=test-broad-secret"
-                + "&audience=prod-qits-deployments")
+                + "&audience=qits-deployments")
             .statusCode(200)
             .extract()
             .path("access_token");
 
-    JwtClaims claims = PublishedJwks.verify(token, "prod-qits-deployments");
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals("qits", claims.getClaimValueAsString("project"), "the granted claim, verbatim");
     assertFalse(claims.hasClaim("workspace"), "an ungranted claim must not appear");
     assertFalse(claims.hasClaim("branch"), "an ungranted claim must not appear");
@@ -210,7 +210,7 @@ public class IdpTokenTest {
             .extract()
             .path("access_token");
 
-    assertTrue(PublishedJwks.verify(token, "prod-qits-deployments").hasClaim("aud"));
+    assertTrue(PublishedJwks.verify(token, "qits-deployments").hasClaim("aud"));
     assertThrows(
         InvalidJwtException.class,
         () -> PublishedJwks.verify(token, "qits-platform-artifacts"),

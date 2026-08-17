@@ -46,7 +46,7 @@ public class TokenLifetimeTest {
                 "grant_type=client_credentials"
                     + "&client_id=test-broad"
                     + "&client_secret=test-broad-secret"
-                    + "&audience=prod-qits-deployments")
+                    + "&audience=qits-deployments")
             .when()
             .post("/idp/token")
             .then()
@@ -55,7 +55,7 @@ public class TokenLifetimeTest {
             .extract()
             .path("access_token");
 
-    JwtClaims claims = PublishedJwks.verify(token, "prod-qits-deployments");
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals(
         TTL_SECONDS,
         claims.getExpirationTime().getValue() - claims.getIssuedAt().getValue(),

@@ -50,13 +50,13 @@ public class CommissionedClientsTest {
     Map<String, String> pair = commission(OWNER, OWNER_SECRET, "mint-kind", "run/4711");
 
     String token =
-        token(pair.get("clientId"), pair.get("secret"), "&audience=prod-qits-deployments")
+        token(pair.get("clientId"), pair.get("secret"), "&audience=qits-deployments")
             .statusCode(200)
             .body("token_type", equalTo("Bearer"))
             .extract()
             .path("access_token");
 
-    JwtClaims claims = PublishedJwks.verify(token, "prod-qits-deployments");
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals(pair.get("clientId"), claims.getSubject(), "the commissioned id is the sub");
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
     assertNotNull(PublishedJwks.kidOf(token), "signed by the same key as everything else");
@@ -67,7 +67,7 @@ public class CommissionedClientsTest {
             .path("access_token");
     JwtClaims allClaims = PublishedJwks.verify(all, "prod-qits-ci");
     assertEquals(
-        List.of("prod-qits-ci", "prod-qits-deployments"),
+        List.of("prod-qits-ci", "qits-deployments"),
         PublishedJwks.audienceOf(allClaims),
         "a commissioned client asking for nothing gets its owner's whole list");
     assertEquals("qits", allClaims.getClaimValueAsString("project"), "the owner's granted claim");
