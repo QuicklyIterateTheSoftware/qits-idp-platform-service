@@ -61,7 +61,7 @@ the client is allowed.
     curl -s -X POST http://qits-platform-idp:8080/idp/token \
       -d grant_type=client_credentials \
       -d client_id=prod-qits-ci -d client_secret=... \
-      -d audience=prod-qits-deployments
+      -d audience=qits-deployments
 
 The token is RS256, carries a `kid`, and says:
 
@@ -110,7 +110,13 @@ services are dialed by — `prod-qits-ci`, `qits-platform-artifacts`, `prod-qits
 `idp/src/main/resources/META-INF/microprofile-config.properties`.
 
 **An id is part of the config key**, so a renamed client takes its `qits.idp.client.<id>.*` lines
-with it. `prod-qits-deployments` is an audience with no client: it receives tokens and mints none.
+with it. `qits-deployments` is an audience with no client: it receives tokens and mints none.
+
+**An audience IS a wire alias**, so how a service is planed decides how it is spelled. An
+environment service carries its environment (`prod-qits-ci`); a platform service is its repository
+name and nothing else — `qits-platform-artifacts`, and `qits-deployments` since the deployer became
+one. Get the two sides out of step and the failure is a silent 401 at the resource service, with a
+valid token nobody rejected here.
 
 **No secret ships with any of them, and a client with a blank secret is unusable rather than open.**
 An unconfigured deployment therefore issues nothing; `QITS_IDP_CLIENT_PROD_QITS_CI_SECRET=…` is what
