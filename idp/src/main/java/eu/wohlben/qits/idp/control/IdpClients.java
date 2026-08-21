@@ -47,13 +47,20 @@ public class IdpClients {
       return Optional.empty();
     }
     String prefix = CLIENT_PREFIX + clientId + ".";
+    List<String> roles = config.getOptionalValues(prefix + "roles", String.class).orElse(List.of());
+    // Config is where a client's roles are configured, so config is where the reserved namespace is
+    // refused. Every other path reads a client through here — a commissioned credential inherits
+    // its owner's roles, and the machine surfaces authenticate through the same lookup — so this
+    // one guard covers all of them and a `clients/…` line makes its client unusable rather than
+    // powerful. See ClientRoles.
+    ClientRoles.refuseReserved(clientId, roles);
     return Optional.of(
         new IdpClient(
             clientId,
             ClientSecret.configured(
                 config.getOptionalValue(prefix + "secret", String.class).orElse(null)),
             config.getOptionalValues(prefix + "audiences", String.class).orElse(List.of()),
-            config.getOptionalValues(prefix + "roles", String.class).orElse(List.of()),
+            roles,
             claims(prefix)));
   }
 

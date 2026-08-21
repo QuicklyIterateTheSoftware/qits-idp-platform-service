@@ -79,6 +79,39 @@ public class CommissionedClientsTest {
   }
 
   @Test
+  public void aCommissionedTokenNamesItselfAndNotTheOwnerThatCommissionedIt() throws Exception {
+    // The commission body has no roles member, and one written anyway changes nothing: roles are
+    // not a thing a caller asks for here. This is the second half of "no client may hold another
+    // client's self-role" — the first is configuration, refused outright.
+    Map<String, String> pair =
+        commissionRaw(
+                OWNER,
+                OWNER_SECRET,
+                "{\"contextKind\":\"self-role-kind\",\"contextId\":\"ctx-self-role\","
+                    + "\"roles\":[\"clients/test-narrow\",\"clients/test-broad\"]}")
+            .statusCode(201)
+            .extract()
+            .as(new io.restassured.common.mapper.TypeRef<Map<String, String>>() {});
+
+    String token =
+        token(pair.get("clientId"), pair.get("secret"), "&audience=qits-deployments")
+            .statusCode(200)
+            .extract()
+            .path("access_token");
+    List<String> groups =
+        PublishedJwks.verify(token, "qits-deployments").getStringListClaimValue("groups");
+
+    assertEquals(
+        List.of("qits:system", "qits-platform:system", "clients/" + pair.get("clientId")),
+        groups,
+        "the owner's configured roles, then the credential's OWN self-role");
+    assertFalse(
+        groups.contains("clients/" + OWNER),
+        "a commissioned credential must not reach a door held open for the client that made it");
+    assertFalse(groups.contains("clients/" + OTHER_OWNER), "nor anyone else's");
+  }
+
+  @Test
   public void theSecretIsReturnedOnceAndTheRowHoldsOnlyAHash() {
     Map<String, String> pair = commission(OWNER, OWNER_SECRET, "hash-kind", "ctx-1");
 

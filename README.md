@@ -71,7 +71,21 @@ The token is RS256, carries a `kid`, and says:
 | `sub` | the client id |
 | `aud` | the resolved audiences, always a JSON array |
 | `iat`, `exp`, `jti` | issued now, valid for `qits.idp.token-ttl-seconds` (3600 by default) |
+| `groups` | the client's configured roles, **plus `clients/<client id>`** — see below |
 | `project`, `workspace`, `branch` | only when granted to the client, copied verbatim |
+
+**Every client token names its own client.** `groups` — which `quarkus-oidc` reads as roles — always
+ends with `clients/<the id in `sub`>`, stamped at mint time and configured nowhere. A role naming one
+client is therefore held by that client alone, by construction rather than by grant, and a resource
+service can write `@RolesAllowed("clients/prod-qits-projects")` for a route exactly one caller may
+ever reach. It is additive: consumers allowlist the roles they care about, so the extra entry is
+inert everywhere else.
+
+That is why **`clients/` is a reserved namespace**: a `qits.idp.client.<id>.roles` line containing
+one is refused with `invalid_request` (400) — another client's id and the client's own alike — and
+the client mints nothing until it is removed. A user credential gets no such role: the workstation
+token below carries `qits:git:external` and nothing more, so the machine identity a service gates on
+cannot be reached through a login.
 
 **Claims, not scopes.** `aud` names the service a token may be used at; the structured claims name
 what it may be used for *within* that service. The idp states them and interprets nothing — a
@@ -162,6 +176,8 @@ The rules around them:
 - **It is issued its owner's audiences and claims**, read from the owner's config when a token is
   minted. Full access for now; per-context scoping is the declared follow-up, and the owner +
   context-kind + context-id triple on the row is what it will attach to.
+- **Its self-role is its own, never its owner's.** `clients/dyn-…` is stamped from the id in `sub`,
+  so a credential commissioned by a service cannot walk through a door held open for that service.
 - **Only a static service client may commission.** A commissioned credential authenticates here —
   so a context can hand its own credential back — but `POST` refuses it, and the blast radius of a
   leaked one therefore stops at one context.

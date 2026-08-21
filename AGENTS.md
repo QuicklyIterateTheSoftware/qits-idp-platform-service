@@ -105,6 +105,16 @@ and by nothing else:**
   there is no entity at all (`noContent()`), and `@RegisterForReflection` is a workaround rather
   than the fix, because it leaves the signature still saying nothing.
 
+**The `clients/` role namespace is minted, never granted.** Every `client_credentials` token's
+`groups` ends with `clients/<the id in sub>` (`ClientRoles`, called from `TokenService`), and a
+configured `roles` line under that prefix is refused where the roles are read (`IdpClients.find`,
+400 `invalid_request`) — for another client's id and for the client's own alike. One guard covers
+every surface because every surface resolves a client through that one lookup: the token endpoint,
+the Basic-authenticated machine APIs, and a commissioned credential inheriting its owner's roles.
+A new place that accepts roles from anywhere else has to call `refuseReserved` itself, and a new
+mint that is not to a client credential must not stamp one — `TokenService.workstation` is the
+standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is what all of it is for.
+
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
 identity to whoever asks. `IdpTokenTest.aClientWithNoSecretIsUnusableRatherThanOpen` runs against

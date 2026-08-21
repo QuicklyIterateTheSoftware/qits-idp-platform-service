@@ -22,6 +22,11 @@ import org.jboss.logging.Logger;
  * the caller may do — that decision belongs to the resource service, helped by the shared
  * enforcement library.
  *
+ * <p><b>Every client token names its own client.</b> The {@code groups} claim carries the
+ * configured roles plus {@code clients/<client-id>}, stamped from the id that just authenticated
+ * ({@link ClientRoles}). A user credential gets none — {@link #workstation} is the other mint here
+ * and it issues one fixed, deliberately narrow role.
+ *
  * <p><b>A commissioned client mints exactly like a service client.</b> This class asks {@link
  * ClientRegistry} for a client and never learns which half answered — that identity is the whole
  * of the commission model working, because it means docker's Bearer dance, quarkus-oidc-client and
@@ -75,7 +80,9 @@ public class TokenService {
             // A Set, so `aud` is always a JSON array — one shape for consumers to read whether the
             // token names one audience or four.
             .audience(new LinkedHashSet<>(audiences))
-            .groups(new LinkedHashSet<>(client.roles()))
+            // The configured roles AND the client's own `clients/<id>`, which is minted here and
+            // grantable nowhere — see ClientRoles.
+            .groups(ClientRoles.mintedFor(client))
             .issuedAt(now)
             .expiresAt(now.plusSeconds(tokenTtlSeconds));
     // The granted claims, verbatim. The idp does not interpret these values.
@@ -92,6 +99,10 @@ public class TokenService {
    * different capability: the resource sees one external-Git role and a ref pattern claim, and
    * must reject every ref outside that pattern. The audience is fixed in configuration rather than
    * accepted from the public client, so this token can never be replayed at another service.
+   *
+   * <p><b>And it carries no {@code clients/…} self-role.</b> That stamp says "this bearer IS that
+   * machine client"; a token minted to a person's browser approval is not one, so the machine
+   * identity a resource service gates on cannot be reached through a login.
    */
   public IssuedToken workstation(UUID userId) {
     Instant now = Instant.now();

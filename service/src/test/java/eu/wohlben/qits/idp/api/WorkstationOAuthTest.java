@@ -3,6 +3,7 @@ package eu.wohlben.qits.idp.api;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 import eu.wohlben.qits.idp.control.Sessions;
@@ -19,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 import org.jose4j.jwt.JwtClaims;
 import org.junit.jupiter.api.Test;
@@ -50,7 +52,12 @@ public class WorkstationOAuthTest {
     String firstRefresh = exchanged.jsonPath().getString("refresh_token");
     JwtClaims claims = PublishedJwks.verify(access, AUDIENCE);
     assertEquals(session.session().userId().toString(), claims.getSubject());
-    assertEquals("qits:git:external", claims.getStringListClaimValue("groups").getFirst());
+    assertEquals(List.of("qits:git:external"), claims.getStringListClaimValue("groups"));
+    // A USER credential, so no `clients/…` self-role: that stamp says "this bearer is that machine
+    // client", and a resource service gating on one must not be reachable through a login.
+    assertFalse(
+        claims.getStringListClaimValue("groups").stream().anyMatch(g -> g.startsWith("clients/")),
+        "only a client credential names a client");
     assertEquals("workstation", claims.getClaimValueAsString("credential_type"));
     assertEquals("refs/heads/external/*", claims.getClaimValueAsString("git_ref_pattern"));
 

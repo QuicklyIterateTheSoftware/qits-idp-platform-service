@@ -1,6 +1,7 @@
 package eu.wohlben.qits.idp.api;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -54,8 +55,11 @@ public class IdpTokenTest {
     assertEquals("test-broad", claims.getSubject());
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
     assertEquals(List.of("qits-deployments"), PublishedJwks.audienceOf(claims));
+    // The configured roles, then the self-role this service stamps. The whole claim is pinned
+    // rather than searched: `groups` is the token's shape, and a change to it is a change every
+    // consumer reads.
     assertEquals(
-        List.of("qits:system", "qits-platform:system"),
+        List.of("qits:system", "qits-platform:system", "clients/test-broad"),
         claims.getStringListClaimValue("groups"));
     assertNotNull(claims.getIssuedAt(), "iat");
     assertEquals(
@@ -114,6 +118,76 @@ public class IdpTokenTest {
     assertFalse(claims.hasClaim("workspace"), "an ungranted claim must not appear");
     assertFalse(claims.hasClaim("branch"), "an ungranted claim must not appear");
     assertNull(claims.getClaimValue("scope"), "claims, not scope strings");
+  }
+
+  @Test
+  public void everyClientTokenNamesItsOwnClientAndNoOther() throws Exception {
+    String broad =
+        post("grant_type=client_credentials"
+                + "&client_id=test-broad"
+                + "&client_secret=test-broad-secret"
+                + "&audience=qits-deployments")
+            .statusCode(200)
+            .extract()
+            .path("access_token");
+    String narrow =
+        post("grant_type=client_credentials"
+                + "&client_id=test-narrow"
+                + "&client_secret=test-narrow-secret")
+            .statusCode(200)
+            .extract()
+            .path("access_token");
+
+    List<String> broadGroups =
+        PublishedJwks.verify(broad, "qits-deployments").getStringListClaimValue("groups");
+    List<String> narrowGroups =
+        PublishedJwks.verify(narrow, "qits-deployments").getStringListClaimValue("groups");
+
+    assertTrue(broadGroups.contains("clients/test-broad"), "a client token names its own client");
+    assertTrue(narrowGroups.contains("clients/test-narrow"), "a client token names its own client");
+    // The point of the whole feature: a role naming one client is held by that client only, so
+    // @RolesAllowed("clients/<x>") is a door exactly one caller can reach.
+    assertFalse(
+        narrowGroups.contains("clients/test-broad"),
+        "no client may hold another client's self-role");
+    assertFalse(
+        broadGroups.contains("clients/test-narrow"),
+        "no client may hold another client's self-role");
+  }
+
+  @Test
+  public void aConfiguredRoleUnderTheReservedNamespaceIsRefused() {
+    // test-role-thief configures clients/test-broad — the impersonation. Refused at the config
+    // read, so the client mints nothing at all rather than minting an identity it was granted.
+    post("grant_type=client_credentials"
+            + "&client_id=test-role-thief"
+            + "&client_secret=test-role-thief-secret")
+        .statusCode(400)
+        .body("error", equalTo("invalid_request"))
+        .body("error_description", containsString("clients/"));
+
+    // And its own is refused too: it would be redundant, and allowing it would make writing the
+    // prefix by hand look like something a deployment does.
+    post("grant_type=client_credentials"
+            + "&client_id=test-role-selfish"
+            + "&client_secret=test-role-selfish-secret")
+        .statusCode(400)
+        .body("error", equalTo("invalid_request"));
+  }
+
+  @Test
+  public void aClientWithAReservedRoleIsRefusedAtTheOtherMachineSurfacesToo() {
+    // Same config, every surface: the commission API authenticates through the same client lookup,
+    // so a `clients/…` line makes the client unusable there as well rather than only at /token.
+    given()
+        .contentType(ContentType.JSON)
+        .header("Authorization", basic("test-role-thief", "test-role-thief-secret"))
+        .body("{\"contextKind\":\"reserved-role\",\"contextId\":\"never\"}")
+        .when()
+        .post("/idp/api/clients")
+        .then()
+        .statusCode(400)
+        .body("error", equalTo("invalid_request"));
   }
 
   @Test
