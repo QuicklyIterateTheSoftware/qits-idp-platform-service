@@ -10,10 +10,9 @@
 #      and never runs an install.
 #
 # That is why this step's image is node-docker-base rather than ci-base: it needs node, npm and git
-# for half one and the docker CLI for half two. THE PATTERN'S HOME IS qits-gateway AND
-# qits-workspaces — both carry the same two halves for the same reason, and their recipes are where
-# the reasoning is maintained. This one follows them rather than re-deriving it; keep the three
-# matching.
+# for half one and the docker CLI for half two. THE PATTERN'S HOME IS qits-workspaces — it carries
+# the same two halves for the same reason, and its recipe is where the reasoning is maintained.
+# This one follows it rather than re-deriving it; keep the two matching.
 steps:
   - image: qits/build-images/node-docker-base:latest
     docker: true
@@ -106,7 +105,7 @@ steps:
       # that broke the release of 2026-08-11.
 
   # The self-release door: a push to maintenance/* asks qits-workspaces to release the branch
-  # once the build step above is green. The sibling-standard step, verbatim from qits-gateway;
+  # once the build step above is green. The sibling-standard step, verbatim from qits-workspaces;
   # that recipe is where the pattern is maintained and the copies should keep matching.
   - image: qits/build-images/node-base:latest
     branches:

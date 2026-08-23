@@ -27,8 +27,8 @@ import org.junit.jupiter.api.Test;
  * /idp/jwks} published rather than against anything reachable in-process.
  *
  * <p>The clients come from {@code src/test/resources/application.properties}. {@code
- * prod-qits-gateway} is one of the SHIPPED service clients, secret-less exactly as it ships — that
- * is what the blank-secret case runs against.
+ * prod-qits-workspaces} is one of the SHIPPED service clients, secret-less exactly as it ships —
+ * that is what the blank-secret case runs against.
  */
 @QuarkusTest
 public class IdpTokenTest {
@@ -207,18 +207,18 @@ public class IdpTokenTest {
 
   @Test
   public void aClientWithNoSecretIsUnusableRatherThanOpen() {
-    // prod-qits-gateway is a SHIPPED service client with no secret configured — the state every
+    // prod-qits-workspaces is a SHIPPED service client with no secret configured — the state every
     // service client ships in. A blank secret must be refused like a wrong one, never accepted as
     // "no authentication required".
-    post("grant_type=client_credentials&client_id=prod-qits-gateway&client_secret=")
+    post("grant_type=client_credentials&client_id=prod-qits-workspaces&client_secret=")
         .statusCode(401)
         .body("error", equalTo("invalid_client"));
-    post("grant_type=client_credentials&client_id=prod-qits-gateway")
+    post("grant_type=client_credentials&client_id=prod-qits-workspaces")
         .statusCode(401)
         .body("error", equalTo("invalid_client"));
     given()
         .contentType(ContentType.URLENC)
-        .header("Authorization", basic("prod-qits-gateway", ""))
+        .header("Authorization", basic("prod-qits-workspaces", ""))
         .body("grant_type=client_credentials")
         .when()
         .post("/idp/token")
