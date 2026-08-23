@@ -649,7 +649,7 @@ public class UserAuthenticationTest {
         .body("error", equalTo("invalid_client"));
     // A shipped client with no secret configured is unusable here too, never open.
     given()
-        .header("Authorization", basic("prod-qits-gateway", ""))
+        .header("Authorization", basic("prod-qits-workspaces", ""))
         .when()
         .post("/idp/api/register-tokens")
         .then()

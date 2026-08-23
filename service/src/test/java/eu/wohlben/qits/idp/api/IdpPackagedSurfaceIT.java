@@ -113,7 +113,8 @@ public class IdpPackagedSurfaceIT {
         .body("issuer", equalTo("http://qits-platform-idp:8080/idp"))
         .body("jwks_uri", equalTo("http://qits-platform-idp:8080/idp/jwks"));
 
-    // prod-qits-gateway routes verbatim by prefix, so there is no unprefixed form to fall back to.
+    // qits-platform-edge routes by declared route and keeps the path, so there is no unprefixed
+    // form to fall back to.
     given().when().get("/.well-known/openid-configuration").then().statusCode(404);
   }
 
@@ -470,7 +471,7 @@ public class IdpPackagedSurfaceIT {
 
   @Test
   public void anUnconfiguredClientStillCannotAuthenticate() {
-    // Only prod-qits-workspaces was given a secret above. The other three ship without one and
+    // Only prod-qits-workspaces was given a secret above. The other two ship without one and
     // must stay unusable in the packaged artifact too.
     given()
         .contentType(ContentType.URLENC)

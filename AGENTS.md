@@ -118,7 +118,7 @@ standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is wha
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
 identity to whoever asks. `IdpTokenTest.aClientWithNoSecretIsUnusableRatherThanOpen` runs against
-`prod-qits-gateway` — a *shipped* client with no secret — rather than a fixture, so the test pins
+`prod-qits-workspaces` — a *shipped* client with no secret — rather than a fixture, so the test pins
 the real default.
 
 ## Package and module conventions

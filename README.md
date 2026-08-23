@@ -119,8 +119,8 @@ clients** are config, because a platform service's identity is genuinely static,
 
 `qits.idp.clients` lists the ids that exist; each one has
 `qits.idp.client.<id>.secret`, `.audiences`, and `.claims.<name>`. The shipped list is the names
-services are dialed by — `prod-qits-ci`, `qits-platform-artifacts`, `prod-qits-workspaces`,
-`prod-qits-gateway` — and the full key reference is in
+services are dialed by — `prod-qits-ci`, `qits-platform-artifacts`, `prod-qits-workspaces` — and
+the full key reference is in
 `idp/src/main/resources/META-INF/microprofile-config.properties`.
 
 **An id is part of the config key**, so a renamed client takes its `qits.idp.client.<id>.*` lines

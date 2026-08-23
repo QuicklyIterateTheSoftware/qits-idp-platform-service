@@ -137,7 +137,7 @@ public class CommissionedClientsTest {
         clientId.contains("project-build-918"), "the context is legible in a listing: " + clientId);
     // The static ids are the names services are dialed by; none of them can be produced here.
     assertFalse(
-        List.of("prod-qits-ci", "qits-platform-artifacts", "prod-qits-workspaces", "prod-qits-gateway")
+        List.of("prod-qits-ci", "qits-platform-artifacts", "prod-qits-workspaces")
             .contains(clientId));
     assertTrue(clientId.length() <= 128, "the column is varchar(128)");
   }
@@ -290,7 +290,7 @@ public class CommissionedClientsTest {
     // A SHIPPED service client with no secret configured stays unusable here too — the same
     // reading as at the token endpoint, so there is no door this API opens that that one does not.
     commissionRaw(
-            "prod-qits-gateway", "", "{\"contextKind\":\"anon-kind\",\"contextId\":\"ctx\"}")
+            "prod-qits-workspaces", "", "{\"contextKind\":\"anon-kind\",\"contextId\":\"ctx\"}")
         .statusCode(401)
         .body("error", equalTo("invalid_client"));
   }
