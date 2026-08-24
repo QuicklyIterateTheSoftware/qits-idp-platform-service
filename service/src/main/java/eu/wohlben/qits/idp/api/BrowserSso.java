@@ -22,13 +22,27 @@ import java.util.Set;
 @ApplicationScoped
 public class BrowserSso {
 
+  /** The prefix that turns an allow-list entry into a one-label wildcard. */
+  private static final String WILDCARD = "*.";
+
   @ConfigMapping(prefix = "qits.idp.browser-sso")
   interface Config {
     /** The one origin that serves login, registration, and WebAuthn. */
     @WithDefault("http://localhost:8080")
     String canonicalOrigin();
 
-    /** Authorities that are allowed to receive a browser after a successful ceremony. */
+    /**
+     * Authorities that are allowed to receive a browser after a successful ceremony.
+     *
+     * <p>An entry is either an exact authority (<code>dev.wohlben.eu</code>,
+     * <code>localhost:8080</code>) or the one wildcard form <code>*.&lt;authority&gt;</code>, which
+     * matches exactly one extra label in front of that authority and nothing else: with
+     * <code>*.dev.wohlben.eu</code> the host <code>ci.dev.wohlben.eu</code> is allowed, while
+     * <code>a.b.dev.wohlben.eu</code> and the bare <code>dev.wohlben.eu</code> are not. The port is
+     * part of the authority, so <code>*.dev.localhost:8080</code> allows
+     * <code>ci.dev.localhost:8080</code> and refuses <code>ci.dev.localhost:9090</code>. One
+     * wildcard entry covers every per-service host of an environment.
+     */
     @WithDefault("localhost:8080")
     List<String> browserHosts();
 
@@ -40,6 +54,7 @@ public class BrowserSso {
 
   private URI canonical;
   private Set<String> hosts;
+  private Set<String> wildcardHosts;
   private String cookieDomain;
 
   @PostConstruct
@@ -54,18 +69,27 @@ public class BrowserSso {
           "qits.idp.browser-sso.canonical-origin must be an http(s) origin with no path, query, or fragment");
     }
     LinkedHashSet<String> configured = new LinkedHashSet<>();
+    LinkedHashSet<String> wildcards = new LinkedHashSet<>();
     for (String host : config.browserHosts()) {
-      String authority = authority(host);
-      if (authority != null) {
+      String entry = host == null ? null : host.strip();
+      boolean wildcard = entry != null && entry.startsWith(WILDCARD);
+      String authority = authority(wildcard ? entry.substring(WILDCARD.length()) : entry);
+      if (authority == null) {
+        continue;
+      }
+      if (wildcard) {
+        wildcards.add(authority);
+      } else {
         configured.add(authority);
       }
     }
+    hosts = Set.copyOf(configured);
+    wildcardHosts = Set.copyOf(wildcards);
     String canonicalAuthority = authority(canonical.getAuthority());
-    if (configured.isEmpty() || canonicalAuthority == null || !configured.contains(canonicalAuthority)) {
+    if (canonicalAuthority == null || !allows(canonicalAuthority)) {
       throw new IllegalStateException(
           "qits.idp.browser-sso.browser-hosts must include the canonical origin's authority");
     }
-    hosts = Set.copyOf(configured);
     cookieDomain = domain(config.cookieDomain().orElse(null));
   }
 
@@ -77,10 +101,29 @@ public class BrowserSso {
   /** A safe, absolute destination. Invalid caller input lands at the canonical front door. */
   String returnLocation(String requestedHost, String requestedPath) {
     String host = authority(requestedHost);
-    if (host == null || !hosts.contains(host)) {
+    if (host == null || !allows(host)) {
       host = authority(canonical.getAuthority());
     }
     return canonical.getScheme() + "://" + host + path(requestedPath);
+  }
+
+  /** Whether the allow-list names this authority, by an exact entry or a wildcard one. */
+  boolean allows(String authority) {
+    if (hosts.contains(authority)) {
+      return true;
+    }
+    for (String parent : wildcardHosts) {
+      int label = authority.length() - parent.length() - 1;
+      // One label and one dot in front of the parent authority, and the port is part of both, so a
+      // different port simply does not end with the parent.
+      if (label > 0
+          && authority.charAt(label) == '.'
+          && authority.endsWith(parent)
+          && authority.lastIndexOf('.', label - 1) < 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   static String path(String raw) {
