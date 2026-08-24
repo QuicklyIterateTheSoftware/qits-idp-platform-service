@@ -246,6 +246,14 @@ sent there with a return authority and path; after login or registration the SPA
 browser-host allow-list and returns an absolute location. A public query string therefore cannot
 turn the login page into an open redirect.
 
+An allow-list entry is either an exact authority or `*.<authority>`, which matches exactly one extra
+label in front of it — `*.dev.wohlben.eu` allows `ci.dev.wohlben.eu` and refuses both
+`a.b.dev.wohlben.eu` and the bare `dev.wohlben.eu`. The port is part of the authority, so
+`*.dev.localhost:8080` refuses `ci.dev.localhost:9090`. One entry covers every per-service host of
+an environment, which is what those hosts need; the session cookie already spans them through
+`Domain=<parent domain>`, and WebAuthn is untouched because the ceremony still runs only at the
+canonical origin.
+
 The value is 256 random bits and nothing else. This store holds a `sha-256:` fingerprint of it, so a
 dump of the idp's database logs nobody in, and the only way to learn anything from a cookie is
 `POST /idp/api/sessions/introspect` — Basic, static client, the edge's own `{env}-qits-edge`
