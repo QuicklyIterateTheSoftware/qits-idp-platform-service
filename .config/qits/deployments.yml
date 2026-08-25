@@ -15,6 +15,12 @@ deployment_target: platform
 # This is a redirect destination and token/JWKS surface, not a left-navigation destination.
 routes: /idp
 
+# THE LOGIN HOST. The edge sends a browser with no session to the host of whichever deployment
+# owns the login route, so `idp.<domain>` is where /idp/login lives and where WebAuthn runs.
+# Nothing is served on the environment door itself any more. No navigation-entries: the login
+# page is not a place to go to from the sidebar.
+host: idp
+
 # The convention would derive the health path from the repository name, but the route path
 # deliberately did not move with the rename — the service still serves /idp. Without this line
 # the deployer probes a 404 and rolls every deployment back as unhealthy.
