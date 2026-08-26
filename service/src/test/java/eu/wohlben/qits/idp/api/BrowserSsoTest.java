@@ -17,6 +17,11 @@ import org.junit.jupiter.api.Test;
 public class BrowserSsoTest {
 
   private static BrowserSso sso(String canonicalOrigin, String... browserHosts) {
+    return sso(canonicalOrigin, Optional.empty(), browserHosts);
+  }
+
+  private static BrowserSso sso(
+      String canonicalOrigin, Optional<String> cookieDomain, String... browserHosts) {
     BrowserSso sso = new BrowserSso();
     sso.config =
         new BrowserSso.Config() {
@@ -32,7 +37,7 @@ public class BrowserSsoTest {
 
           @Override
           public Optional<String> cookieDomain() {
-            return Optional.empty();
+            return cookieDomain;
           }
         };
     sso.validate();
@@ -76,6 +81,36 @@ public class BrowserSsoTest {
     assertEquals("http://localhost:8080/", sso.returnLocation("ci.dev.wohlben.eu", "/"));
     // Still no open redirect through the path either.
     assertEquals("http://localhost:8080/", sso.returnLocation("evil.example", "//evil.example"));
+  }
+
+  @Test
+  public void aTargetlessLoginLandsAtTheAllowListedCookieParentRatherThanTheIdpItself() {
+    // The public shape since the login moved onto its own host: canonical is idp.<domain>, the
+    // cookie parent is the apex, and the apex is an allow-list entry.
+    BrowserSso sso =
+        sso("https://idp.wohlben.eu", Optional.of("wohlben.eu"), "wohlben.eu", "*.wohlben.eu");
+
+    // No target at all — a typed login address — goes to the platform's front door, not the IdP.
+    assertEquals("https://wohlben.eu/", sso.returnLocation(null, null));
+    // A refused host falls back the same way.
+    assertEquals("https://wohlben.eu/projects", sso.returnLocation("evil.example", "/projects"));
+    // A listed host is still honoured verbatim, the IdP's own included.
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("idp.wohlben.eu", "/"));
+  }
+
+  @Test
+  public void aCookieParentTheAllowListDoesNotNameChangesNothing() {
+    // The local platform: the cookie parent carries no port, so it is not a listed authority and
+    // the canonical origin remains the fallback, exactly as before.
+    BrowserSso sso =
+        sso(
+            "http://dev.localhost:8080",
+            Optional.of("dev.localhost"),
+            "dev.localhost:8080",
+            "*.dev.localhost:8080");
+
+    assertEquals("http://dev.localhost:8080/", sso.returnLocation(null, null));
+    assertEquals("http://dev.localhost:8080/", sso.returnLocation("evil.example", "/"));
   }
 
   @Test
