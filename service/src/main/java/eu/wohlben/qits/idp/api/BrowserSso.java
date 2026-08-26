@@ -56,6 +56,7 @@ public class BrowserSso {
   private Set<String> hosts;
   private Set<String> wildcardHosts;
   private String cookieDomain;
+  private String landing;
 
   @PostConstruct
   void validate() {
@@ -91,6 +92,15 @@ public class BrowserSso {
           "qits.idp.browser-sso.browser-hosts must include the canonical origin's authority");
     }
     cookieDomain = domain(config.cookieDomain().orElse(null));
+    // Where a visitor with no valid destination lands. The canonical origin stopped being the
+    // platform's front door when the login moved onto its own host, so falling back to it would
+    // strand a targetless login on the IdP's own SPA. The cookie parent domain is the platform's
+    // apex by construction — the same installation fact, stated once — and the edge forwards its
+    // `/` to the landing application. It only qualifies when the allow-list names it (a public
+    // installation lists its apex; the local platform's cookie parent carries no port and is not
+    // an entry), and the canonical origin stays the answer everywhere else.
+    String parent = authority(cookieDomain);
+    landing = parent != null && allows(parent) ? parent : canonicalAuthority;
   }
 
   /** The configured parent domain, or {@code null} for a host-only cookie. */
@@ -98,11 +108,11 @@ public class BrowserSso {
     return cookieDomain;
   }
 
-  /** A safe, absolute destination. Invalid caller input lands at the canonical front door. */
+  /** A safe, absolute destination. A missing or refused host lands at the platform's front door. */
   String returnLocation(String requestedHost, String requestedPath) {
     String host = authority(requestedHost);
     if (host == null || !allows(host)) {
-      host = authority(canonical.getAuthority());
+      host = landing;
     }
     return canonical.getScheme() + "://" + host + path(requestedPath);
   }
