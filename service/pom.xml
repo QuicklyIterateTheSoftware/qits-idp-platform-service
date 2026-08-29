@@ -7,7 +7,7 @@
     <parent>
         <groupId>eu.wohlben.qits</groupId>
         <artifactId>qits-idp</artifactId>
-        <version>2026.826.92106</version>
+        <version>2026.829.120632</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -116,6 +116,21 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <!-- The user-story framework: TokenIssuanceBootstrapIT is written as @UserStory methods,
+                 so the packaged minting proof doubles as documentation — steps, interactions and a
+                 sequence diagram emitted under target/userstories/. Both its stories are browserless
+                 (an Interactions parameter and no Flow), so the framework's transitive Playwright
+                 never launches anything and no browser is ever downloaded — which is what lets the
+                 userflow pipeline run in a step container with no Chromium in it. Version pinned in
+                 the parent.
+
+                 There is deliberately no qits-service-mock beside it: this service is the issuer and
+                 has no upstream to stand in for. See the parent's property comment. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-userflows</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>
@@ -133,8 +148,8 @@
         <dependency>
             <!-- Named per architecture on purpose: the binaries are separate artifacts and zonky
                  picks one at run time, so an unnamed arch fails in the middle of a suite rather
-                 than during resolution. These three are what this platform is built and developed
-                 on. -->
+                 than during resolution. These are what this platform is built, developed and now
+                 also CI-tested on. -->
             <groupId>io.zonky.test.postgres</groupId>
             <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
             <scope>test</scope>
@@ -142,6 +157,17 @@
         <dependency>
             <groupId>io.zonky.test.postgres</groupId>
             <artifactId>embedded-postgres-binaries-linux-arm64v8</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- THE FOURTH ARCH, AND IT IS THE CI ONE. The step containers are Alpine (musl):
+                 .config/qits/ci-event-userflows.yml runs `mvn verify` in maven-base as
+                 `user: build`, TokenIssuanceBootstrapIT hands the launched artifact an embedded
+                 postgres, and zonky picks the -alpine binaries there at run time. Without this
+                 entry that pipeline resolves green and dies mid-suite on a missing artifact —
+                 qits-githost's service pom carries the same fourth arch for the same pipeline. -->
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -176,9 +202,17 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
             <plugin>
-                <!-- IdpPackagedSurfaceIT binds here. skipITs=true is the parent's default, so a
-                     fresh clone's `mvn verify` is green; `-DskipITs=false` runs it against the
-                     fast-jar and the `native` profile flips it to run against the binary. -->
+                <!-- IdpPackagedSurfaceIT and TokenIssuanceBootstrapIT bind here. skipITs=true is
+                     the parent's default, so a fresh clone's `mvn verify` is green; `-DskipITs=false`
+                     runs both against the fast-jar and the `native` profile flips it to run them
+                     against the binary. They launch SEPARATE processes against SEPARATE databases
+                     on the one embedded postgres — see each profile's database name — so neither
+                     can see the other's signing key.
+
+                     The userflow pipeline runs exactly one of them by name
+                     (`-Dit.test=TokenIssuanceBootstrapIT`), because it builds without Quinoa and
+                     IdpPackagedSurfaceIT is half about the client; the parent's skipITs comment
+                     carries the whole reasoning. -->
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <executions>
                     <execution>
@@ -215,8 +249,10 @@
         <!-- GraalVM native build (the profile every deployable sibling carries): `-Dnative` turns
              the fast-jar off and the native image on. It lives in THIS module, not the root pom,
              because only this module is an application — `idp` is a library jar with nothing to
-             native-compile. skipITs flips with it so the build runs IdpPackagedSurfaceIT against
-             the binary it just produced rather than packaging one nobody starts. -->
+             native-compile. skipITs flips with it so the build runs both ITs against the binary it
+             just produced rather than packaging one nobody starts — and TokenIssuanceBootstrapIT
+             earns its place there twice over, since minting and JWKS publication are JCA end to end
+             and a native image is exactly where a lost provider hides. -->
         <profile>
             <id>native</id>
             <activation>
