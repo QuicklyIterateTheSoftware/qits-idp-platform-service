@@ -47,6 +47,19 @@
              docker/Dockerfile and .qits-maven-settings.xml. -->
         <qits.db-core.version>2026.817.175344</qits.db-core.version>
         <qits.arch-rules.version>2026.817.175344</qits.arch-rules.version>
+        <!-- The user-story framework (test scope): TokenIssuanceBootstrapIT is written as @UserStory
+             methods, so a run that boots the packaged artifact also regenerates
+             service/target/userstories/ — the stories' documentation, sequence diagram included.
+             Released out of libs/qits-userflows into the platform's own Maven repository, which is
+             the same place the two jars above come from, so nothing new had to be arranged to
+             resolve it.
+
+             NO qits-service-mock BESIDE IT, unlike every sibling's copy of this block. A mock is
+             what a service under test stands where its upstream is, and this service HAS none: it
+             is the issuer, it validates nothing against an OIDC tenant, and the only host it dials
+             is the postgres its own datasource names. The story's far side is the caller, which is
+             the test itself. -->
+        <qits.userflows.version>2026.828.153026</qits.userflows.version>
         <qits.maven.repository.url>http://registry.dev.localhost:8080/artifacts/maven/maven</qits.maven.repository.url>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -83,10 +96,21 @@
         <failsafe-plugin.version>3.5.4</failsafe-plugin.version>
         <jandex-plugin.version>3.4.0</jandex-plugin.version>
 
-        <!-- `mvn verify` must be green on a clone with nothing installed. The packaged-artifact IT
-             runs with -DskipITs=false, and `service`'s `native` profile flips it so a -Dnative
+        <!-- `mvn verify` must be green on a clone with nothing installed. The packaged-artifact ITs
+             run with -DskipITs=false, and `service`'s `native` profile flips it so a -Dnative
              build exercises the binary it just compiled instead of packaging it and asserting
-             nothing. -->
+             nothing.
+
+             IT STAYS TRUE FOR THE USERFLOW RUN TOO, rather than the module opting itself back in
+             the way qits-githost does. .config/qits/ci-event-userflows.yml wants exactly one of
+             this module's two ITs — TokenIssuanceBootstrapIT, the userflow — and builds WITHOUT
+             Quinoa, because the qits-platform-spa-idp submodule arrives EMPTY in a step container.
+             A blanket -DskipITs=false would also run IdpPackagedSurfaceIT, half of which is about
+             the client that run deliberately does not build (the base href, the deep links, the
+             fallback that must not swallow a machine path), and would make a quinoa-less run red
+             on a test that is right. The pipeline names the class instead:
+             `-DskipITs=false "-Dit.test=TokenIssuanceBootstrapIT"`. Keeping this property's
+             meaning ("run everything") intact is what makes that spelling readable. -->
         <skipITs>true</skipITs>
 
         <!-- Surefire's @{argLine} has no value unless something (jacoco/quarkus) sets it. -->
@@ -138,6 +162,13 @@
                 <groupId>${project.groupId}</groupId>
                 <artifactId>qits-arch-rules</artifactId>
                 <version>${qits.arch-rules.version}</version>
+            </dependency>
+            <dependency>
+                <!-- The user-story framework, test scope at the use site. Same platform repository
+                     as the two above. -->
+                <groupId>${project.groupId}</groupId>
+                <artifactId>qits-userflows</artifactId>
+                <version>${qits.userflows.version}</version>
             </dependency>
             <dependency>
                 <!-- Managed here rather than versioned at the use site because Quinoa is in no BOM;
