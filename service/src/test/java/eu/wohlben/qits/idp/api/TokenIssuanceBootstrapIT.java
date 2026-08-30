@@ -10,14 +10,17 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import eu.wohlben.qits.idp.testdb.EmbeddedPg;
+import eu.wohlben.qits.idp.stories.support.StoryNetwork;
+import eu.wohlben.qits.idp.stories.support.StoryProfile;
+import eu.wohlben.qits.idp.stories.support.StoryTarget;
 import eu.wohlben.qits.userflows.Interactions;
+import eu.wohlben.qits.userflows.NetworkCapture;
+import eu.wohlben.qits.userflows.NetworkEdge;
 import eu.wohlben.qits.userflows.UserStory;
 import eu.wohlben.qits.userflows.UserStoryDescription;
 import eu.wohlben.qits.userflows.report.ReportAssertions;
 import eu.wohlben.qits.userflows.report.UserflowReport;
 import io.quarkus.test.junit.QuarkusIntegrationTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.http.ContentType;
 import io.restassured.path.json.JsonPath;
@@ -27,11 +30,16 @@ import java.security.KeyFactory;
 import java.security.Signature;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.jose4j.jwt.JwtClaims;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.TestMethodOrder;
 
 /**
  * The whole service as it is <b>packaged</b>, telling the platform's auth bootstrap <b>from the
@@ -49,9 +57,10 @@ import org.junit.jupiter.api.AfterAll;
  *
  * <p><b>There is no far side at all, and that is the shape of this service rather than an
  * omission.</b> The idp is a leaf: it dials the postgres its datasource names and nothing else, so
- * there is no upstream to record and no stand-in to start. The recorded interactions are therefore
- * all between a platform service and this one — which is precisely the sequence diagram a reader of
- * the sibling stories arrives here looking for.
+ * there is no upstream to record and no stand-in to start. Every observed edge therefore runs from
+ * a caller INTO this one — which is precisely the network diagram a reader of the sibling stories
+ * arrives here looking for, with the arrow pointing the other way. It is also why {@link
+ * StoryNetwork} installs one feed where every sibling pairs the tap with a mock's recording.
  *
  * <p>Why the PACKAGED artifact and not a {@code @QuarkusTest}: the suite's clients come from {@code
  * src/test/resources/application.properties}, which is not in the jar. The launched process reads
@@ -62,11 +71,20 @@ import org.junit.jupiter.api.AfterAll;
  * up, which {@link IdpPackagedSurfaceIT} already proves survives packaging; here it is the story's
  * subject rather than its precondition.
  *
- * <p>It is also this repo's first <b>userflow</b>: the proof doubles as documentation,
- * emitted under {@code target/userstories/} with the interactions drawn as a sequence diagram.
- * Both stories are browserless (an {@code Interactions} parameter and no {@code Flow}), so the
- * framework's transitive Playwright never launches anything — which is what lets this run in a
- * step container with no browser in it.
+ * <p>It is also this repo's first <b>userflow</b>: the proof doubles as documentation, emitted
+ * under {@code target/userstories/} with a network diagram beside the steps. Both stories are
+ * browserless (an {@code Interactions} parameter and no {@code Flow}), so the framework's
+ * transitive Playwright never launches anything — which is what lets this run in a step container
+ * with no browser in it.
+ *
+ * <p><b>The diagram is observed, never narrated.</b> {@link Interactions} records notes only;
+ * the framework's shipped RestAssured tap ({@link StoryNetwork}) sees what a story sends into this
+ * service and labels it with the status this service answered. A story method therefore asserts and notes; it draws nothing. Two
+ * consequences shape the code below. The actor is <b>named before the call</b>, because nothing on
+ * this surface distinguishes the client from an impostor presenting its id — that distinction is
+ * the second story. And the bearer this service <i>answers</i> with is no edge of its own: it is
+ * the response half of {@code POST /idp/token}, so what the token contains lives in a note beside
+ * the step.
  *
  * <p><b>This IT is named on the command line rather than opted in from the pom</b> ({@code
  * .config/qits/ci-event-userflows.yml}): {@link IdpPackagedSurfaceIT} is the module's other IT and
@@ -78,7 +96,8 @@ import org.junit.jupiter.api.AfterAll;
  * profile that sets it.
  */
 @QuarkusIntegrationTest
-@TestProfile(TokenIssuanceBootstrapIT.PackagedAsTheIssuer.class)
+@TestProfile(StoryProfile.class)
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class TokenIssuanceBootstrapIT {
 
   static final String CATEGORY = "authentication";
@@ -86,16 +105,19 @@ public class TokenIssuanceBootstrapIT {
       "a-platform-service-exchanges-its-client-credentials-for-a-bearer";
   static final String REFUSED_SLUG = "the-wrong-secret-mints-nothing-and-the-jwks-stays-open";
 
+  /** How the diagram names this service — the {@code to} of every edge either story observes. */
+  static final String SERVICE = StoryTarget.SERVICE;
+
   /**
    * The client this story is told as. It is a SHIPPED static client — one of the three names in the
    * jar's {@code qits.idp.clients} — so its audiences, its roles and its refusals below are the
    * deployment's own configuration. Only the secret is supplied, because a static client ships
    * without one on purpose and is unusable until a deployment gives it one.
    */
-  static final String CLIENT = "prod-qits-ci";
+  static final String CLIENT = StoryTarget.CI;
 
   /** What a deployment sets as {@code QITS_IDP_CLIENT_PROD_QITS_CI_SECRET}. */
-  static final String SECRET = "userflow-it-secret";
+  static final String SECRET = StoryTarget.CI_SECRET;
 
   /**
    * The audience the story asks for: the deployer's intake, which is the platform's first real
@@ -103,60 +125,29 @@ public class TokenIssuanceBootstrapIT {
    * environment prefix — qits-deployments is a platform service and receives tokens without minting
    * any, so it is an audience with no client.
    */
-  static final String AUDIENCE = "qits-deployments";
+  static final String AUDIENCE = StoryTarget.DEPLOYMENTS_AUDIENCE;
 
   /**
    * An audience nobody's shipped list carries. Asking for it is the {@code invalid_target} case,
    * and it is deliberately a plausible service name rather than nonsense: the refusal that matters
    * is the one a real adoption walks into.
    */
-  static final String UNENTITLED_AUDIENCE = "prod-qits-observability";
+  static final String UNENTITLED_AUDIENCE = StoryTarget.UNENTITLED_AUDIENCE;
+
+  /** Bearers this class was answered. Checked absent from the bundle in {@code @AfterAll}. */
+  private static final List<String> NEVER_IN_THE_BUNDLE = new ArrayList<>();
 
   /**
-   * Hands the launched artifact its config the way a deployment does — the generic resource triple
-   * and one client secret, and nothing else, because that is the whole of what an idp deployment
-   * supplies ({@code .config/qits/deployments.yml} declares {@code resources: postgresql:db} and
-   * the deployer injects the three names the shipped datasource expression reads). Every key here
-   * is a RUNTIME key: a packaged process takes its configuration as {@code -D} arguments on a jar
-   * that was already built, so a build-time key would be silently ignored and this would prove
-   * something other than what it says.
+   * Installs the capture wiring this catalogue shares, once, before either story runs.
    *
-   * <p>The database is the same embedded postgres the surefire suite spawns, under a name of this
-   * IT's own — {@code idp_userflows_it}, beside {@link IdpPackagedSurfaceIT}'s {@code
-   * idp_packaged_it} — so the two launched processes can never mean the same schema, and each
-   * generates its own signing key. <b>Its url travels through a system property rather than a
-   * static field</b>: a test profile is instantiated in more than one classloader, so a field
-   * written by one copy is not the field the other reads, while the process has exactly one
-   * property table.
+   * <p>One line, and {@link StoryNetwork} is where the reason there is only one feed is written
+   * down: this service has no upstream to record, so the shipped RestAssured tap is the whole
+   * diagram. The method order is pinned beside it, which costs nothing and keeps the emitted
+   * reports reproducible run to run.
    */
-  public static class PackagedAsTheIssuer implements QuarkusTestProfile {
-
-    /** Where the url is parked for whichever copy of this class is asked second. */
-    private static final String URL_PROPERTY = "qits.test.userflow-it.db-url";
-
-    @Override
-    public Map<String, String> getConfigOverrides() {
-      return Map.of(
-          "QITS_RESOURCE_DB_URL", databaseUrl(),
-          "QITS_RESOURCE_DB_USERNAME", EmbeddedPg.USER,
-          "QITS_RESOURCE_DB_PASSWORD", EmbeddedPg.PASSWORD,
-          "qits.idp.client." + CLIENT + ".secret", SECRET,
-          // Dark outside a deployment, like %dev/%test — and it is the ONE dial-out this process
-          // has besides its own datasource, so disabling it leaves the launched artifact reaching
-          // for nothing this step container cannot answer.
-          "quarkus.otel.sdk.disabled", "true");
-    }
-
-    private static synchronized String databaseUrl() {
-      String recorded = System.getProperty(URL_PROPERTY);
-      if (recorded != null) {
-        return recorded;
-      }
-      // localhost resolves for the launched process too — it is a child of this JVM on this host.
-      String url = EmbeddedPg.url("idp_userflows_it");
-      System.setProperty(URL_PROPERTY, url);
-      return url;
-    }
+  @BeforeAll
+  static void tapWhatReachesTheIssuer() {
+    StoryNetwork.install();
   }
 
   @UserStory(
@@ -180,8 +171,14 @@ public class TokenIssuanceBootstrapIT {
       published JWKS, under the `kid` the token names: the token and the document a consumer
       fetches are the two ends of one key, which is the whole of why offline validation works.
       """)
+  @Order(1)
   void aPlatformServiceMintsABearerAndTheKeyThatSignedItIsPublished(Interactions story)
       throws Exception {
+    // Everything this story sends is the platform service's, so the actor is named once, up front —
+    // before the first call, because the tap sees a request and never a narrative role. The
+    // framework resets it to a default at every story start, so nothing leaks in from elsewhere.
+    NetworkCapture.actor(CLIENT);
+
     story.note(
         "qits-platform-idp starts against its own database and generates the signing key into it");
     given().get("/idp/q/health/ready").then().statusCode(200).body("status", equalTo("UP"));
@@ -199,7 +196,9 @@ public class TokenIssuanceBootstrapIT {
         .body("grant_types_supported", hasItem("client_credentials"))
         .body("id_token_signing_alg_values_supported", hasItem("RS256"));
     story
-        .happened(CLIENT, "qits-platform-idp", "GET /idp/.well-known/openid-configuration")
+        .note(
+            "the consumer knows ONE string — the issuer — and follows its discovery document to the"
+                + " token endpoint and the JWKS; every path below is read off it, never known")
         .as("discovery-read");
 
     // The exchange itself: client_secret_post, RFC 6749 client_credentials, one named audience.
@@ -225,11 +224,16 @@ public class TokenIssuanceBootstrapIT {
             .header("Cache-Control", "no-store")
             .extract()
             .path("access_token");
+    // The bearer is generated, so it goes into no note and no label — it is checked ABSENT from the
+    // whole bundle in @AfterAll. A token in a diagram would be a live credential on a docs site.
+    NEVER_IN_THE_BUNDLE.add(token);
     story
-        .happened(
-            CLIENT,
-            "qits-platform-idp",
-            "POST /idp/token (client_credentials, audience=" + AUDIENCE + ")")
+        .note(
+            "it presents the credential pair its deployment gave it and asks for one audience,"
+                + " "
+                + AUDIENCE
+                + " — RFC 6749 client_credentials, answered with the SHIPPED hour-long lifetime and"
+                + " no-store")
         .as("bearer-minted");
 
     // End (a), the token's: verified the way a consumer would — against whatever /idp/jwks
@@ -251,17 +255,19 @@ public class TokenIssuanceBootstrapIT {
         List.of("qits:system", "qits-platform:system", "clients/" + CLIENT),
         claims.getStringListClaimValue("groups"),
         "the configured roles, then the self-role this service stamps");
+    // The ANSWER is not an edge of its own. Direction on a diagram is who initiated, and nobody
+    // initiated the response to a request already drawn — the `-> 200` on the POST above is where
+    // it shows. What the bearer CONTAINS is a claim about a body, which no tap can see; it belongs
+    // here, beside the assertions that pinned it.
     story
-        .happened(
-            "qits-platform-idp",
-            CLIENT,
-            "200 Bearer (sub="
+        .note(
+            "the bearer says who the caller is (sub="
                 + CLIENT
-                + ", aud="
+                + "), what it may be presented to (aud="
                 + AUDIENCE
-                + ", groups=[…, clients/"
+                + ") and what it is (groups = the configured system roles plus clients/"
                 + CLIENT
-                + "])")
+                + ", the self-role this service stamps and nobody can be granted)")
         .as("bearer-answered");
 
     // End (b), the document's: the key a sibling fetches at startup is the key that signed this
@@ -271,8 +277,13 @@ public class TokenIssuanceBootstrapIT {
     String kid = PublishedJwks.kidOf(token);
     assertNotNull(kid, "every token carries a kid, or rotation is a flag day");
     thePublishedKeyValidatesTheSignature(token, kid);
+    // The JWKS was read twice — once by the consumer-shaped verification above, once by the plain
+    // JCA check — and both are the same edge: same caller, same route, same 200. The count is not
+    // the point and the diagram is right to draw one arrow; what matters is in the note.
     story
-        .happened(CLIENT, "qits-platform-idp", "GET /idp/jwks (the key with kid=" + kid + ")")
+        .note(
+            "the key that signed the token is on the published JWKS under the kid the token names —"
+                + " the two ends of one key, which is the whole of why offline validation works")
         .as("signing-key-published");
   }
 
@@ -298,8 +309,12 @@ public class TokenIssuanceBootstrapIT {
       the JWKS. The discovery document is open for the same reason. Nothing secret is on either
       — the published key is the public half and carries no private member, and never gains one.
       """)
+  @Order(2)
   void aWrongSecretAndAnUnentitledAudienceAreDifferentRefusals(Interactions story) {
     // (a) authentication fails. The client id is real and on the shipped list; the secret is not.
+    // The request therefore CARRIES client_id=prod-qits-ci and is not from that client at all,
+    // which is exactly why the initiator is named by the story and never derived from the wire.
+    NetworkCapture.actor(StoryTarget.IMPOSTOR);
     given()
         .contentType(ContentType.URLENC)
         .body(
@@ -313,12 +328,19 @@ public class TokenIssuanceBootstrapIT {
         .body("error", equalTo("invalid_client"))
         .body("access_token", nullValue());
     story
-        .happened("an impostor", "qits-platform-idp", "POST /idp/token (wrong secret) -> 401")
+        .note(
+            "a wrong secret is invalid_client, and the refusal is deliberately COARSE — which of"
+                + " \"unknown client\", \"no secret configured\" and \"wrong secret\" happened is not"
+                + " something the caller is always the right one to learn")
         .as("wrong-secret-refused");
 
     // (b) authentication SUCCEEDS and authorization fails. Same credential as the story above,
     // asking for an audience that is on nobody's shipped list — 400 invalid_target, RFC 8707's
     // code, and a different answer from (a) on purpose.
+    //
+    // The real client this time, and the diagram says so: same route as the impostor's, a different
+    // initiator and a different status, which is the whole distinction the story is about.
+    NetworkCapture.actor(CLIENT);
     given()
         .contentType(ContentType.URLENC)
         .body(
@@ -334,16 +356,18 @@ public class TokenIssuanceBootstrapIT {
         .body("error", equalTo("invalid_target"))
         .body("access_token", nullValue());
     story
-        .happened(
-            CLIENT,
-            "qits-platform-idp",
-            "POST /idp/token (audience=" + UNENTITLED_AUDIENCE + ") -> 400 invalid_target")
+        .note(
+            "an audience the client is not entitled to is invalid_target, and this request"
+                + " AUTHENTICATED — a leaked credential is bounded by the audience list its"
+                + " deployment gave it, so succeeding at one and failing the other must be two"
+                + " answers with two codes")
         .as("unentitled-audience-refused");
 
     // (c) the two bootstrap doors, with no credential presented at all. This service configures no
     // HTTP path permissions — its guarded surfaces check the caller in code — so today this passes
     // by construction; it is asserted at the DEPLOYED posture so that a future blanket policy over
     // /idp/* fails here rather than in every consumer's startup at once.
+    NetworkCapture.actor(StoryTarget.UNCREDENTIALED);
     given()
         .get("/idp/jwks")
         .then()
@@ -357,10 +381,12 @@ public class TokenIssuanceBootstrapIT {
         .body("keys[0].q", nullValue());
     given().get("/idp/.well-known/openid-configuration").then().statusCode(200);
     story
-        .happened(
-            "any service, holding nothing",
-            "qits-platform-idp",
-            "GET /idp/jwks and /idp/.well-known/openid-configuration (no credential) -> 200")
+        .note(
+            "both bootstrap doors stay open to a caller holding NOTHING: every service fetches the"
+                + " JWKS at boot, before it holds a token, and a JWKS behind a bearer would be a"
+                + " service unable to validate the bearer that would let it fetch the JWKS. Nothing"
+                + " secret is on either — the published key is the public half and never gains a"
+                + " private member")
         .as("bootstrap-doors-open");
   }
 
@@ -407,21 +433,83 @@ public class TokenIssuanceBootstrapIT {
   @AfterAll
   static void bothStoryReportsAreComplete() {
     // The extension emits each report in its afterEach, so both are on disk before @AfterAll runs.
+    // assertComplete also proves the network section: the sidecar's edges are canonical, the
+    // networkHash recomputes from them, and every mermaid line is in the markdown.
     ReportAssertions.assertComplete(CATEGORY, MINTED_SLUG, UserflowReport.PASSED);
-    ReportAssertions.assertInteraction(
+
+    // --- the minting story's whole graph -------------------------------------------------------
+    // Three edges and all of them incoming, because there is no upstream to draw. The JWKS was read
+    // twice and is one edge: same caller, same route, same status.
+    ReportAssertions.assertEdge(
         CATEGORY,
         MINTED_SLUG,
+        NetworkEdge.HTTP,
         CLIENT,
-        "qits-platform-idp",
-        "GET /idp/.well-known/openid-configuration");
+        SERVICE,
+        "GET /idp/.well-known/openid-configuration -> 200");
+    ReportAssertions.assertEdge(
+        CATEGORY, MINTED_SLUG, NetworkEdge.HTTP, CLIENT, SERVICE, "POST /idp/token -> 200");
+    ReportAssertions.assertEdge(
+        CATEGORY, MINTED_SLUG, NetworkEdge.HTTP, CLIENT, SERVICE, "GET /idp/jwks -> 200");
+    // EXACTLY those three. A fourth would mean a probe the tap's skip missed, or this process
+    // dialling something — and "the idp is a leaf" is a claim no presence check can make.
+    ReportAssertions.assertEdgeCount(CATEGORY, MINTED_SLUG, 3);
+
     ReportAssertions.assertStepId(CATEGORY, MINTED_SLUG, "discovery-read");
     ReportAssertions.assertStepId(CATEGORY, MINTED_SLUG, "bearer-minted");
     ReportAssertions.assertStepId(CATEGORY, MINTED_SLUG, "bearer-answered");
     ReportAssertions.assertStepId(CATEGORY, MINTED_SLUG, "signing-key-published");
 
     ReportAssertions.assertComplete(CATEGORY, REFUSED_SLUG, UserflowReport.PASSED);
+
+    // --- the refusal story's whole graph -------------------------------------------------------
+    // The two token requests are the same route and differ in initiator and status — which is the
+    // story, and is why neither distinction was ever allowed into a label.
+    ReportAssertions.assertEdge(
+        CATEGORY,
+        REFUSED_SLUG,
+        NetworkEdge.HTTP,
+        StoryTarget.IMPOSTOR,
+        SERVICE,
+        "POST /idp/token -> 401");
+    ReportAssertions.assertEdge(
+        CATEGORY, REFUSED_SLUG, NetworkEdge.HTTP, CLIENT, SERVICE, "POST /idp/token -> 400");
+    ReportAssertions.assertEdge(
+        CATEGORY,
+        REFUSED_SLUG,
+        NetworkEdge.HTTP,
+        StoryTarget.UNCREDENTIALED,
+        SERVICE,
+        "GET /idp/jwks -> 200");
+    ReportAssertions.assertEdge(
+        CATEGORY,
+        REFUSED_SLUG,
+        NetworkEdge.HTTP,
+        StoryTarget.UNCREDENTIALED,
+        SERVICE,
+        "GET /idp/.well-known/openid-configuration -> 200");
+    ReportAssertions.assertEdgeCount(CATEGORY, REFUSED_SLUG, 4);
+
     ReportAssertions.assertStepId(CATEGORY, REFUSED_SLUG, "wrong-secret-refused");
     ReportAssertions.assertStepId(CATEGORY, REFUSED_SLUG, "unentitled-audience-refused");
     ReportAssertions.assertStepId(CATEGORY, REFUSED_SLUG, "bootstrap-doors-open");
+
+    // --- what NEITHER story has ------------------------------------------------------------------
+    // THE LEAF'S CLAIM. Both stories are told entirely against static clients, and a static client
+    // is four configuration lookups — so the platform's whole daily-bread path (discovery, mint,
+    // JWKS, and every refusal on it) is answered without this process initiating anything at all,
+    // not even toward its own store. The commissioning stories are where a row is really touched,
+    // and they DECLARE that edge rather than leaving the picture half-drawn.
+    ReportAssertions.assertNoEdgesFrom(CATEGORY, MINTED_SLUG, SERVICE);
+    ReportAssertions.assertNoEdgesFrom(CATEGORY, REFUSED_SLUG, SERVICE);
+
+    // And nothing that was presented or answered is in either bundle. A secret in a label would be
+    // a deployment credential on a docs site; a bearer would be a live one.
+    for (String slug : List.of(MINTED_SLUG, REFUSED_SLUG)) {
+      ReportAssertions.assertNotLeaked(CATEGORY, slug, SECRET);
+      for (String value : NEVER_IN_THE_BUNDLE) {
+        ReportAssertions.assertNotLeaked(CATEGORY, slug, value);
+      }
+    }
   }
 }

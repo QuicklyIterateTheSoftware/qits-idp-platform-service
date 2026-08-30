@@ -47,9 +47,10 @@
              docker/Dockerfile and .qits-maven-settings.xml. -->
         <qits.db-core.version>2026.817.175344</qits.db-core.version>
         <qits.arch-rules.version>2026.817.175344</qits.arch-rules.version>
-        <!-- The user-story framework (test scope): TokenIssuanceBootstrapIT is written as @UserStory
-             methods, so a run that boots the packaged artifact also regenerates
-             service/target/userstories/ — the stories' documentation, sequence diagram included.
+        <!-- The user-story framework (test scope): this module's story catalogue —
+             api/TokenIssuanceBootstrapIT plus the classes under api/../stories/ — is written as
+             @UserStory methods, so a run that boots the packaged artifact also regenerates
+             service/target/userstories/: the stories' documentation, network diagram included.
              Released out of libs/qits-userflows into the platform's own Maven repository, which is
              the same place the two jars above come from, so nothing new had to be arranged to
              resolve it.
@@ -57,9 +58,11 @@
              NO qits-service-mock BESIDE IT, unlike every sibling's copy of this block. A mock is
              what a service under test stands where its upstream is, and this service HAS none: it
              is the issuer, it validates nothing against an OIDC tenant, and the only host it dials
-             is the postgres its own datasource names. The story's far side is the caller, which is
-             the test itself. -->
-        <qits.userflows.version>2026.828.153026</qits.userflows.version>
+             is the postgres its own datasource names. So the catalogue registers no
+             NetworkCapture.source at all — the shipped RestAssured tap is the whole diagram, every
+             arrow points IN, and the one dependency this process does have arrives as a DECLARED
+             jdbc edge in the two commissioning stories. -->
+        <qits.userflows.version>2026.829.201516</qits.userflows.version>
         <qits.maven.repository.url>http://registry.dev.localhost:8080/artifacts/maven/maven</qits.maven.repository.url>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
