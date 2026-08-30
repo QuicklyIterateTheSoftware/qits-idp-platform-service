@@ -280,6 +280,9 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
 
 ## Tests
 
+- The **integration** tests are two different things and are listed separately: the story catalogue
+  is under "Userflows" below, and `IdpPackagedSurfaceIT` is here. They share no `@TestProfile` and
+  no database, deliberately.
 - App-level config lives in `service/src/main/resources/application.properties` and Quarkus merges
   it into the test config. **Never re-declare an app-level setting in test resources.** The suite's
   copy re-declares exactly one — `qits.idp.clients`, because a test client cannot be added without
@@ -336,3 +339,85 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   so `/idp/` is served by nothing during the `@QuarkusTest` suite: that the page arrives with the
   matching `<base href>`, that a deep link falls back to it, and that every ignored prefix answers
   404 rather than HTML are all packaged-only facts.
+
+## Userflows
+
+The **story catalogue** — `service/src/test/java/eu/wohlben/qits/idp/stories/**` plus
+`api/TokenIssuanceBootstrapIT`, which predates the package and stayed where it is because its name
+is a cross-repo landmark. Seven `@UserStory` methods in six `@QuarkusIntegrationTest` classes,
+emitting `service/target/userstories/<category>/<story>/` — sidecar, markdown, HTML — which
+`.config/qits/ci-event-userflows.yml` tars and publishes as `@userflows/qits-platform-idp`. The
+framework is `eu.wohlben.qits:qits-userflows` (test scope, version pinned in the root pom); how to
+write one is in that library's `AGENTS.md` and `docs/report-contract.md`.
+
+**The catalogue is the mirror image of every sibling's.** Each of them carries a
+`TokenValidationBootstrapIT` that stands a `MockIdp` where this service really is. Here there is
+nothing to stand in for, so **there is no `NetworkCapture.source` anywhere in this repository**: the
+shipped RestAssured tap (`NetworkTaps.restAssured`, installed once by `stories/support/StoryNetwork`)
+is the whole feed, and every observed arrow points *in*. The hand-copied `api/StoryNetworkFilter`
+this repo carried was deleted when the catalogue was written; a new story class calls
+`StoryNetwork.install()` and never writes a tap.
+
+**One `@TestProfile` for all six classes** — `stories/support/StoryProfile` — and that is not
+tidiness. A profile is what failsafe launches a process for, so a second one would be a second
+issuer with a second database and **a second signing key**, and a diagram whose traffic landed in
+whichever process happened to be running. `IdpPackagedSurfaceIT` keeps its own profile and its own
+database on purpose and is deliberately *not* in this run (see the ci file: it is half about the
+client, which the run does not build).
+
+**What the profile supplies, and the one thing it invents.** The generic resource triple, two client
+secrets, and `quarkus.otel.sdk.disabled`. The third shipped client, `qits-platform-artifacts`, gets
+**no** secret — that is the shipped state of every static client and `FrontDoorRefusalsIT` runs its
+"unusable, never open" arm against it rather than against a fixture. The one invention is
+`uf-role-thief`, a client configured with another client's minted self-role, because the reserved-
+namespace guard is on *configuration* and no request can express it; adding it costs restating
+`qits.idp.clients` (the three shipped ids verbatim, plus the fourth), which is the same single
+concession `src/test/resources/application.properties` makes.
+
+**The leaf claim, and exactly what it proves.** `assertNoEdgesFrom("qits-platform-idp")` is on the
+minting, refusal and key-serving stories, and there it has teeth: a static client is four config
+lookups and `published()` is a volatile cache, so the platform's whole bootstrap path is answered
+without this process initiating anything at all. The two commissioning stories really do touch rows,
+so they **declare** the jdbc edge (`Network.declare`) instead — dashed in the diagram and flagged
+`declared` in the sidecar, because a claim must never render like evidence. What the assertion does
+*not* prove is that no socket was opened: there is no outbound tap that could have seen one. What
+makes it true is structural — no rest-client, no oidc-client, no event bus on this classpath — plus
+the exporter being off.
+
+**Two stated coverage gaps, neither papered over:**
+
+- **This service's own OTLP export is not covered.** The shipped config points its SDK at
+  `http://qits-observability:8080/observability/api/otel`, which resolves on `qits-net` and nowhere
+  else; a launched artifact would retry into the void, and an exporter flushing on its own thread
+  would draw arrows into whichever story happened to be open. It is disabled, and no story claims
+  its absence either — an `assertNoEdgesTo` over an exporter the profile switched off would be a
+  claim about the profile.
+- **A consumer cannot follow the advertised absolute URLs.** `qits.idp.issuer` names
+  `http://qits-platform-idp:8080/idp`, and a `@TestProfile` cannot point it at the launched process:
+  the port is ephemeral and the overrides are computed before the process exists.
+  `BootstrapDocumentsIT` therefore reads the document's *derivation* and addresses the paths on the
+  real port. That the document derives its endpoints from the one issuer string is proven; that a
+  consumer resolves the host is a deployment fact.
+
+**Labels.** A commissioned client id is `dyn-<kind>-<slug>-<22 base64url chars>` — readable on
+purpose, and therefore invisible to the default scrubber, which looks for UUIDs, long hex and bare
+numbers. `StoryTarget.normalize` rewrites it to `{id}` through `NetworkCapture.labelNormalizer`, and
+`StoryTarget.served(...)` runs an assertion's expected label through the same two functions in the
+same order, so an assertion and an observation cannot disagree. **No credential can reach a label**:
+neither a secret nor a bearer is ever on a path — but every story asserts that rather than assuming
+it, with `assertNotLeaked` over each secret it presented, each token it was answered, and each
+generated id (which is the hash-stability check wearing the same coat).
+
+**Adding a story.** One story per class, so `@UserflowPrecondition` / `@UserflowRunsAfter` stay
+usable (they are `@Target(METHOD)`). Name the class's own `contextKind` if it writes rows — the
+launched process migrates but does **not** clean its schema, so the store carries what earlier runs
+left, and a listing assertion filters rather than assuming an empty table. Install the tap from
+`@BeforeAll` and pin at least one edge, or a later edit that drops the install empties every diagram
+in the class while every remaining assertion still passes. And **add the class to
+`.config/qits/ci-event-userflows.yml`'s `-Dit.test` list in the same commit**: a class that is not
+named does not run there, and its story disappears from the published bundle with the build green.
+
+The whole gate locally, in one line:
+
+    ./mvnw -DskipITs=false -Dquarkus.quinoa=false verify \
+      -Dit.test=TokenIssuanceBootstrapIT,BootstrapDocumentsIT,CommissionedCredentialIT,CommissionRefusalsIT,FrontDoorRefusalsIT,ReservedRoleNamespaceIT

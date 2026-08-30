@@ -7,7 +7,7 @@
     <parent>
         <groupId>eu.wohlben.qits</groupId>
         <artifactId>qits-idp</artifactId>
-        <version>2026.829.140450</version>
+        <version>2026.830.24205</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -116,9 +116,14 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <!-- The user-story framework: TokenIssuanceBootstrapIT is written as @UserStory methods,
-                 so the packaged minting proof doubles as documentation — steps, interactions and a
-                 sequence diagram emitted under target/userstories/. Both its stories are browserless
+            <!-- The user-story framework: this module's six story classes are written as @UserStory
+                 methods, so the packaged proofs double as documentation — steps, notes and an
+                 OBSERVED network diagram emitted under target/userstories/. The diagram's one feed
+                 is the framework's SHIPPED RestAssured tap (NetworkTaps.restAssured, installed via
+                 stories/support/StoryNetwork); the hand-copied api/StoryNetworkFilter this repo
+                 carried was deleted when the catalogue was written. There is no far side to record,
+                 because this service is the issuer and dials nobody but its own datasource — which
+                 the commissioning stories declare rather than observe. Every story is browserless
                  (an Interactions parameter and no Flow), so the framework's transitive Playwright
                  never launches anything and no browser is ever downloaded — which is what lets the
                  userflow pipeline run in a step container with no Chromium in it. Version pinned in

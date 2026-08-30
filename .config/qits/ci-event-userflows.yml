@@ -1,7 +1,7 @@
 # The per-commit userflow run: `mvn verify` at the pushed commit — which regenerates
-# service/target/userstories/ through TokenIssuanceBootstrapIT — and the reports published as one
-# docs bundle, site @userflows/qits-platform-idp, version = the bare commit sha, branch riding as
-# artifacts metadata for discovery.
+# service/target/userstories/ through the SIX story classes named below — and the reports published
+# as one docs bundle, site @userflows/qits-platform-idp, version = the bare commit sha, branch
+# riding as artifacts metadata for discovery.
 #
 # NON-GATING BY DESIGN, which is why it is a separate file from ci-post-receive.yml: this run going
 # red must not cost the branch its image while "quality gate before merging" is still a decision to
@@ -11,12 +11,40 @@
 # WHAT THE STORIES ARE, because this repository's are the platform's own mirror image. Every sibling
 # service carries a TokenValidationBootstrapIT proving the VALIDATING end of one story — it fetches
 # this service's JWKS at startup and accepts a bearer signed by the key it found — and each of them
-# has to stand a MockIdp where this service really is. TokenIssuanceBootstrapIT is that story with
-# the mock taken out: a shipped static client presents its credential pair, the packaged issuer
-# answers a bearer, and the key that signed it is on the document the siblings fetch. THERE IS NO
-# MOCK AND NO STAND-IN IN THIS FILE'S RUN AT ALL — the idp is a leaf, it validates nothing against
-# an OIDC tenant and dials only the postgres its own datasource names, so the story's far side is
-# the caller and the caller is the test.
+# has to stand a MockIdp where this service really is. This catalogue is that story with the mock
+# taken out, told from the minting end. THERE IS NO MOCK AND NO STAND-IN IN THIS FILE'S RUN AT ALL —
+# the idp is a leaf, it validates nothing against an OIDC tenant and dials only the postgres its own
+# datasource names, so every story's far side is the caller and the caller is the test.
+#
+# SEVEN STORIES IN SIX CLASSES, all on ONE @TestProfile (stories/support/StoryProfile) and therefore
+# in ONE launched process — two profiles would be two issuers, two databases and two signing keys:
+#
+#   api/TokenIssuanceBootstrapIT        two stories, category `authentication`, and the class that
+#                                       owns the BOOT: it sorts first by fully-qualified name and
+#                                       calls readiness before anything else. A shipped static
+#                                       client presents its pair, the packaged issuer answers a
+#                                       bearer, the key that signed it is on the document the
+#                                       siblings fetch — and the wrong secret and an unentitled
+#                                       audience are two different refusals.
+#   stories/keys/BootstrapDocumentsIT   the two open documents the whole platform bootstraps from,
+#                                       their derivation from the ONE issuer string, and the shipped
+#                                       cache posture (no-store for the bearer, cacheable for the
+#                                       documents, no max-age on either).
+#   stories/commissioning/…Credential   a workspace commissions a credential, the container mints
+#                                       with its owner's reach under its own identity, and
+#                                       decommission stops it on the very next request.
+#   stories/commissioning/…Refusals     what a commissioned credential may NOT do: commission
+#                                       another (403), be seen or deleted by another owner (404) —
+#                                       and the one thing it may, hand itself back (204).
+#   stories/refusals/FrontDoorRefusals  six ways to be refused at POST /idp/token and four RFC 6749
+#                                       codes, including a SHIPPED client with no secret, which is
+#                                       unusable rather than open.
+#   stories/refusals/ReservedRoleNames  a deployment that configured another client's minted
+#                                       self-role: invalid_request, and the client mints nothing.
+#
+# ADD EVERY NEW STORY CLASS TO THE -Dit.test LIST BELOW IN THE SAME COMMIT: a class that is not
+# named simply does not run here, and its story silently disappears from the published bundle while
+# the build stays green.
 #
 # `user: build`, and NOT a switch inside the script: the IT hands the launched artifact an embedded
 # postgres (the signing key lives in a database, which is the whole reason validation survives a
@@ -38,17 +66,18 @@
 #
 # THE TWO IT FLAGS ARE THE OTHER HALF, and they are why this repository does NOT opt its service
 # module back into ITs the way qits-githost does. `skipITs` is true in the root pom and stays true;
-# this module has TWO integration tests and only one of them belongs to this run:
+# this module has SEVEN integration tests and six of them belong to this run — the six story classes
+# above. The seventh does not:
 #
-#   TokenIssuanceBootstrapIT  the userflow — the whole point of this file
 #   IdpPackagedSurfaceIT      half about the CLIENT (the `<base href>`, the deep links, the SPA
-#                             fallback that must not swallow a machine path), which the line above
-#                             deliberately does not build. A blanket `-DskipITs=false` would make
-#                             this quinoa-less run red on a test that is right.
+#                             fallback that must not swallow a machine path), which the quinoa line
+#                             above deliberately does not build. A blanket `-DskipITs=false` would
+#                             make this quinoa-less run red on a test that is right. It also carries
+#                             its OWN @TestProfile and its own database (idp_packaged_it), so
+#                             running it here would launch a second issuer for nothing.
 #
-# Naming the class keeps the opt-in to this pipeline and to this story, and keeps the property's own
-# meaning ("run everything") intact for the `native` profile that sets it:
-# `-DskipITs=false "-Dit.test=TokenIssuanceBootstrapIT"`.
+# Naming the classes keeps the opt-in to this pipeline and to these stories, and keeps the
+# property's own meaning ("run everything") intact for the `native` profile that sets it.
 #
 # NO REPAIR WAS NEEDED to make the new test-scope jar resolve. This repository already carries
 # `.qits-maven-settings.xml` and a `qits-maven` <repositories> entry — qits-db-core and
@@ -84,7 +113,8 @@ steps:
       ./mvnw -B -ntp -s .qits-maven-settings.xml verify \
         -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
         -Dquarkus.quinoa=false \
-        -DskipITs=false "-Dit.test=TokenIssuanceBootstrapIT"
+        -DskipITs=false \
+        "-Dit.test=TokenIssuanceBootstrapIT,BootstrapDocumentsIT,CommissionedCredentialIT,CommissionRefusalsIT,FrontDoorRefusalsIT,ReservedRoleNamespaceIT"
 
       # `-C … .` so the story directories are the bundle's roots — nesting one directory deep would
       # put it in every served URL. The path is service/target/userstories because the stories live
