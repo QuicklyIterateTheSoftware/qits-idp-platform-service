@@ -1,6 +1,7 @@
-# qits-platform-idp
+# qits-idp-platform-service
 
-The platform's own identity provider, for **machines and for people**.
+The platform's own identity provider, for **machines and for people**, deployed as the
+`qits-platform-idp` application.
 
 The machine half is an RS256 signing key that survives restarts, a JWKS, an OIDC discovery document,
 and a `client_credentials` token endpoint the platform's services authenticate to each other with,
@@ -42,8 +43,8 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 
 ### The client
 
-`qits-platform-spa-idp` (Angular) is a submodule at `service/src/main/webui`, and Quinoa builds it
-during `mvn package` and serves it from this process at `/idp/`.
+`qits-idp-platform-frontend` (Angular) is a submodule at `service/src/main/webui`, and Quinoa builds
+it during `mvn package` and serves it from this process at `/idp/`.
 
 **The client and the protocol share one root**, which no sibling service does: everywhere else the
 REST surface is `/<segment>/api`, one level below the SPA. Here `quarkus.rest.path` is `/idp`

@@ -1,4 +1,4 @@
-# qits-platform-idp — working notes
+# qits-idp-platform-service — working notes
 
 Read `README.md` first: it defines the surface, the token's shape, and where clients and keys come
 from. This file is the working conventions on top of it.
@@ -10,8 +10,8 @@ from. This file is the working conventions on top of it.
 argument — `service/src/test/resources/application.properties` sets `quarkus.http.test-port=0`.
 
 **Clone-alone now means clone *and* `git submodule update --init`, plus a node on `PATH`.** This
-service serves a client: `qits-platform-spa-idp` at `service/src/main/webui`, built by Quinoa during
-`package` and served at `/idp/`. `verify` runs `package`, so both are required — an uninitialised
+service serves a client: `qits-idp-platform-frontend` at `service/src/main/webui`, built by Quinoa
+during `package` and served at `/idp/`. `verify` runs `package`, so both are required — an uninitialised
 submodule is an empty directory and stops the build at "No package.json found in Web UI directory".
 `./mvnw test` needs neither, because Quinoa is disabled in test mode, which is also why nothing
 about the client can be proven by a `@QuarkusTest` (see `IdpPackagedSurfaceIT`).
