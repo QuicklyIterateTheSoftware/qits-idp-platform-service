@@ -134,6 +134,15 @@ COPY . .
 ARG QITS_MAVEN_REPOSITORY_URL=http://registry.dev.localhost:8080/artifacts/maven/maven
 ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
 #
+# --- and where Maven Central is mirrored, when it is ----------------------------------------------
+# The pipeline passes the platform's pull-through (qits-platform-mirror's central proxy; the FROM
+# lines above name upstream directly, so this is the one mirrored hop in this file); EMPTY — the
+# default — means direct Maven Central.
+# `.qits-maven-settings.xml` activates its central-proxy profile only on a non-empty value, so a
+# bootstrap or hand build that passes nothing resolves exactly as it always did.
+ARG QITS_MAVEN_CENTRAL_URL=
+ENV QITS_MAVEN_CENTRAL_URL=$QITS_MAVEN_CENTRAL_URL
+#
 # --- and the credential that answers the registry's 401 -------------------------------------------
 # Once reads through the edge are gated, that resolve needs one. It arrives as two BuildKit secret
 # mounts, which reach THIS `RUN`'s environment and nothing else — not a layer, not the image
