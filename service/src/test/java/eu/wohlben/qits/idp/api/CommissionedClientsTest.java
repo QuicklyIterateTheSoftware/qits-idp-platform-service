@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.idp.control.DynamicClients;
@@ -41,6 +42,9 @@ public class CommissionedClientsTest {
   private static final String OWNER_SECRET = "test-broad-secret";
   private static final String OTHER_OWNER = "test-narrow";
   private static final String OTHER_OWNER_SECRET = "test-narrow-secret";
+
+  /** A project id in the shape the platform actually mints them, so the value charset is exercised. */
+  private static final String A_PROJECT = "b03b84b1-1875-4071-9dbf-854550156258";
 
   @jakarta.inject.Inject IdpDynamicClientRepository repository;
 
@@ -84,14 +88,13 @@ public class CommissionedClientsTest {
     // not a thing a caller asks for here. This is the second half of "no client may hold another
     // client's self-role" — the first is configuration, refused outright.
     Map<String, String> pair =
-        commissionRaw(
-                OWNER,
-                OWNER_SECRET,
-                "{\"contextKind\":\"self-role-kind\",\"contextId\":\"ctx-self-role\","
-                    + "\"roles\":[\"clients/test-narrow\",\"clients/test-broad\"]}")
-            .statusCode(201)
-            .extract()
-            .as(new io.restassured.common.mapper.TypeRef<Map<String, String>>() {});
+        pairOf(
+            commissionRaw(
+                    OWNER,
+                    OWNER_SECRET,
+                    "{\"contextKind\":\"self-role-kind\",\"contextId\":\"ctx-self-role\","
+                        + "\"roles\":[\"clients/test-narrow\",\"clients/test-broad\"]}")
+                .statusCode(201));
 
     String token =
         token(pair.get("clientId"), pair.get("secret"), "&audience=qits-deployments")
@@ -304,21 +307,190 @@ public class CommissionedClientsTest {
     decommission(OWNER, OWNER_SECRET, "prod-qits-ci").statusCode(404);
   }
 
+  // --- per-context scoping ------------------------------------------------------------------
+
+  @Test
+  public void aCommissionStatesWhatItsContextIsAboutAndTheTokenCarriesIt() throws Exception {
+    // The owner holds no `project` claim — none of the platform's commissioning services does, and
+    // that is exactly the point: the scope comes from the commission, not from the client making it.
+    io.restassured.response.ExtractableResponse<?> answer =
+        commissionRaw(
+                OTHER_OWNER,
+                OTHER_OWNER_SECRET,
+                "{\"contextKind\":\"workspace\",\"contextId\":\"1101\","
+                    + "\"claims\":{\"project\":\"" + A_PROJECT + "\"}}")
+            .statusCode(201)
+            .body("claims.project", equalTo(A_PROJECT))
+            .extract();
+    String clientId = answer.path("clientId");
+    String secret = answer.path("secret");
+
+    JwtClaims claims =
+        PublishedJwks.verify(
+            token(clientId, secret, "").statusCode(200).extract().path("access_token"),
+            "qits-deployments");
+
+    assertEquals(
+        A_PROJECT,
+        claims.getClaimValueAsString("project"),
+        "the claim a resource service scopes this credential by");
+    assertNull(claims.getClaimValueAsString("workspace"), "and nothing it did not state");
+    assertNull(claims.getClaimValueAsString("branch"));
+
+    // On the row, in the column V2 dropped and V5 brought back together with this reader.
+    IdpDynamicClient row = QuarkusTransaction.requiringNew().call(() -> repository.findById(clientId));
+    assertEquals("project=" + A_PROJECT, row.claims);
+  }
+
+  @Test
+  public void aStatedClaimOverridesTheOwnersGrantAndLeavesItsOthersAlone() throws Exception {
+    // test-broad is granted project=qits. This commission states a workspace the owner holds no
+    // grant for at all, so the merge has to keep one and add the other.
+    io.restassured.response.ExtractableResponse<?> added =
+        commissionRaw(
+                OWNER,
+                OWNER_SECRET,
+                "{\"contextKind\":\"merge-kind\",\"contextId\":\"ctx-merge\","
+                    + "\"claims\":{\"workspace\":\"ws-77\"}}")
+            .statusCode(201)
+            .extract();
+    JwtClaims merged =
+        PublishedJwks.verify(
+            token(
+                    added.path("clientId"),
+                    added.path("secret"),
+                    "&audience=qits-deployments")
+                .statusCode(200)
+                .extract()
+                .path("access_token"),
+            "qits-deployments");
+
+    assertEquals("qits", merged.getClaimValueAsString("project"), "the owner's grant, untouched");
+    assertEquals("ws-77", merged.getClaimValueAsString("workspace"), "and this commission's own");
+
+    // And now the override, on the one name the owner does grant.
+    io.restassured.response.ExtractableResponse<?> narrowed =
+        commissionRaw(
+                OWNER,
+                OWNER_SECRET,
+                "{\"contextKind\":\"merge-kind\",\"contextId\":\"ctx-narrow\","
+                    + "\"claims\":{\"project\":\"" + A_PROJECT + "\"}}")
+            .statusCode(201)
+            .extract();
+
+    assertEquals(
+        A_PROJECT,
+        PublishedJwks.verify(
+                token(
+                        narrowed.path("clientId"),
+                        narrowed.path("secret"),
+                        "&audience=qits-deployments")
+                    .statusCode(200)
+                    .extract()
+                    .path("access_token"),
+                "qits-deployments")
+            .getClaimValueAsString("project"),
+        "the row wins over the owner's grant for the name it states");
+  }
+
+  @Test
+  public void aCommissionMayNotWidenItselfToTheWildcard() {
+    // The whole security argument as one status code: a commission narrows. `*` is granted to a
+    // service client in configuration, by an operator, and cannot be asked for over the wire.
+    commissionRaw(
+            OTHER_OWNER,
+            OTHER_OWNER_SECRET,
+            "{\"contextKind\":\"widen-kind\",\"contextId\":\"ctx-widen\","
+                + "\"claims\":{\"project\":\"*\"}}")
+        .statusCode(400)
+        .body("error", equalTo("invalid_request"));
+
+    assertEquals(
+        List.of(),
+        listedIds(OTHER_OWNER, OTHER_OWNER_SECRET, "widen-kind"),
+        "a refused claim leaves no row and no secret behind");
+  }
+
+  @Test
+  public void aCommissionMayNotInventAClaimName() {
+    commissionRaw(
+            OTHER_OWNER,
+            OTHER_OWNER_SECRET,
+            "{\"contextKind\":\"invent-kind\",\"contextId\":\"ctx-invent\","
+                + "\"claims\":{\"groups\":\"qits:admin\"}}")
+        .statusCode(400)
+        .body("error", equalTo("invalid_request"));
+
+    assertEquals(List.of(), listedIds(OTHER_OWNER, OTHER_OWNER_SECRET, "invent-kind"));
+  }
+
+  @Test
+  public void aCommissionThatStatesNothingIsTheInheritanceItAlwaysWas() throws Exception {
+    // The compatibility case, and every row written before the column existed: no claims member at
+    // all, the owner's grant untouched, and a null column.
+    Map<String, String> pair = commission(OWNER, OWNER_SECRET, "unstated-kind", "ctx-unstated");
+
+    IdpDynamicClient row =
+        QuarkusTransaction.requiringNew().call(() -> repository.findById(pair.get("clientId")));
+    assertNull(row.claims, "nothing stated is nothing stored");
+
+    assertEquals(
+        "qits",
+        PublishedJwks.verify(
+                token(pair.get("clientId"), pair.get("secret"), "&audience=qits-deployments")
+                    .statusCode(200)
+                    .extract()
+                    .path("access_token"),
+                "qits-deployments")
+            .getClaimValueAsString("project"),
+        "the owner's granted claim, exactly as before");
+  }
+
+  @Test
+  public void theListingShowsHowEachCommissionIsScoped() {
+    // The reconcile read doubles as the operator's answer to "why can this credential not do that".
+    commissionRaw(
+            OTHER_OWNER,
+            OTHER_OWNER_SECRET,
+            "{\"contextKind\":\"scoped-listing\",\"contextId\":\"ctx-listed\","
+                + "\"claims\":{\"project\":\"" + A_PROJECT + "\"}}")
+        .statusCode(201);
+
+    given()
+        .header("Authorization", basic(OTHER_OWNER, OTHER_OWNER_SECRET))
+        .when()
+        .get("/idp/api/clients")
+        .then()
+        .statusCode(200)
+        .body("find { it.contextKind == 'scoped-listing' }.claims.project", equalTo(A_PROJECT));
+  }
+
   // --- helpers ------------------------------------------------------------------------------
 
+  /**
+   * The pair, by path rather than by binding the whole body to a {@code Map<String, String>}. The
+   * response has not been flat since commissions could state their claims — {@code claims} is a
+   * nested object — and a helper that binds every member would make an unrelated test fail the next
+   * time a member is added.
+   */
   private static Map<String, String> commission(
       String owner, String secret, String contextKind, String contextId) {
-    return commissionRaw(
-            owner,
-            secret,
-            "{\"contextKind\":\"" + contextKind + "\",\"contextId\":\"" + contextId + "\"}")
-        .statusCode(201)
-        .header("Cache-Control", "no-store")
-        .body("owner", equalTo(owner))
-        .body("contextKind", equalTo(contextKind))
-        .body("contextId", equalTo(contextId))
-        .extract()
-        .as(new io.restassured.common.mapper.TypeRef<Map<String, String>>() {});
+    return pairOf(
+        commissionRaw(
+                owner,
+                secret,
+                "{\"contextKind\":\"" + contextKind + "\",\"contextId\":\"" + contextId + "\"}")
+            .statusCode(201)
+            .header("Cache-Control", "no-store")
+            .body("owner", equalTo(owner))
+            .body("contextKind", equalTo(contextKind))
+            .body("contextId", equalTo(contextId)));
+  }
+
+  /** The two members every caller of a commission actually uses. */
+  private static Map<String, String> pairOf(ValidatableResponse answer) {
+    io.restassured.response.ExtractableResponse<?> body = answer.extract();
+    return Map.of("clientId", body.path("clientId"), "secret", body.path("secret"));
   }
 
   private static ValidatableResponse commissionRaw(String owner, String secret, String body) {

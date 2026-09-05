@@ -90,7 +90,10 @@ cannot be reached through a login.
 
 **Claims, not scopes.** `aud` names the service a token may be used at; the structured claims name
 what it may be used for *within* that service. The idp states them and interprets nothing — a
-resource service decides what a value permits, including whether `*` means "any".
+resource service decides what a value permits, including whether `*` means "any". They reach a token
+from two places: a static client's configured `qits.idp.client.<id>.claims.<name>`, and — for a
+commissioned credential — the `claims` its commission stated, which is the narrower of the two by
+construction.
 
 Refusals are RFC 6749 §5.2: `invalid_client` (401, with a `WWW-Authenticate` challenge),
 `invalid_request` / `unsupported_grant_type` / `invalid_target` (400).
@@ -157,13 +160,20 @@ distribute, and the idp does not have to validate its own tokens to answer.
       http://qits-platform-idp:8080/idp/api/clients
     # 201
     # {"clientId":"dyn-ci-run-4711-8Xq…","secret":"…","owner":"prod-qits-ci",
-    #  "contextKind":"ci-run","contextId":"4711","createdAt":"2026-08-14T11:02:03.412Z"}
+    #  "contextKind":"ci-run","contextId":"4711","claims":{},"createdAt":"2026-08-14T11:02:03.412Z"}
+
+    # commission SCOPED — what this context is about, and therefore what the credential may act on
+    curl -s -u prod-qits-workspaces:$SECRET -H 'Content-Type: application/json' \
+      -d '{"contextKind":"workspace","contextId":"1101",
+           "claims":{"project":"b03b84b1-1875-4071-9dbf-854550156258"}}' \
+      http://qits-platform-idp:8080/idp/api/clients
+    # 201, and every token it mints carries project=b03b84b1-…
 
     # what this caller has out — for reconciling orphans after a crash
     curl -s -u prod-qits-ci:$SECRET http://qits-platform-idp:8080/idp/api/clients
     # 200
     # [{"clientId":"dyn-ci-run-4711-8Xq…","owner":"prod-qits-ci",
-    #   "contextKind":"ci-run","contextId":"4711","createdAt":"…"}]
+    #   "contextKind":"ci-run","contextId":"4711","claims":{},"createdAt":"…"}]
 
     # decommission — 204
     curl -s -X DELETE -u prod-qits-ci:$SECRET \
@@ -174,9 +184,17 @@ The rules around them:
 - **A commissioned client mints exactly like a service client.** Same `POST /idp/token`, same
   grant, same token shape — which is why docker's Bearer dance and `quarkus-oidc-client` need no
   second code path.
-- **It is issued its owner's audiences and claims**, read from the owner's config when a token is
-  minted. Full access for now; per-context scoping is the declared follow-up, and the owner +
-  context-kind + context-id triple on the row is what it will attach to.
+- **It is issued its owner's audiences and roles**, read from the owner's config when a token is
+  minted. So narrowing an owner's audiences narrows every credential it commissioned, at once.
+- **Its claims are its own, and a commission narrows.** The optional `claims` member states what
+  this context is *about* — `{"project":"<projectId>"}` for a workspace — and those land on the row
+  and go into every token it mints, over the owner's grants for the same names and beside the ones
+  it does not state. **`*` is refused with `invalid_request` (400)**, and that asymmetry is the
+  whole rule: a concrete value is narrower than saying nothing (a resource service reads an absent
+  claim as "unscoped" and answers it from roles), while `*` is the one value that is never a
+  narrowing. The wildcard stays a deployment's configured grant on a service client, which an
+  operator writes and a request cannot. Only `project`, `workspace` and `branch` may be stated; any
+  other name is a 400. See `control/CommissionedClaims`.
 - **Its self-role is its own, never its owner's.** `clients/dyn-…` is stamped from the id in `sub`,
   so a credential commissioned by a service cannot walk through a door held open for that service.
 - **Only a static service client may commission.** A commissioned credential authenticates here —
