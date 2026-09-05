@@ -150,10 +150,13 @@ ENV QITS_MAVEN_CENTRAL_URL=$QITS_MAVEN_CENTRAL_URL
 # reason this is a mount. `.qits-maven-settings.xml` reads the pair as the `qits-maven-network`
 # server. This service mints those clients; its own build consumes one like every other repository's.
 #
-# Absent secrets leave both variables unset and the resolve anonymous — today's state, and a
+# Absent secrets leave both variables empty and the resolve anonymous — today's state, and a
 # developer host's permanently, because Maven sends credentials only when a repository answers 401.
-RUN --mount=type=secret,id=qits-client-id,env=QITS_MAVEN_AUTH_USR \
-    --mount=type=secret,id=qits-client-secret,env=QITS_MAVEN_AUTH_PSW \
+# The `RUN` reads the two mounted files itself: docker 26's BuildKit has no `env=` mount option.
+RUN --mount=type=secret,id=qits-client-id \
+    --mount=type=secret,id=qits-client-secret \
+    export QITS_MAVEN_AUTH_USR="$(cat /run/secrets/qits-client-id 2>/dev/null || true)"; \
+    export QITS_MAVEN_AUTH_PSW="$(cat /run/secrets/qits-client-secret 2>/dev/null || true)"; \
     d=service/src/main/webui/dist/qits-platform-spa-idp/browser; \
     test -f "$d/index.html" || { \
       echo "No built client SPA at $d." >&2; \
