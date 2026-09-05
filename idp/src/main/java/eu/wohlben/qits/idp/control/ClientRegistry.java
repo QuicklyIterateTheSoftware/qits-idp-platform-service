@@ -4,6 +4,8 @@ import eu.wohlben.qits.idp.control.DynamicClients.StoredClient;
 import eu.wohlben.qits.idp.error.OAuthException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -19,14 +21,19 @@ import org.jboss.logging.Logger;
  * Commissioned ids carry {@link DynamicClients#ID_PREFIX} on top of that, so the two namespaces do
  * not overlap in the first place.
  *
- * <p><b>A commissioned client is issued its owner's audiences and claims</b>, read here at mint
- * time rather than copied into the row. Full access for now, which is the plan's decision
- * (2026-08-14): a credential commissioned by qits-ci can do what qits-ci can do, so nothing has to
- * be enumerated before the credentials can replace the static ones. Two consequences worth knowing:
- * narrowing an owner's audiences narrows every credential it commissioned, at once; and an owner
- * removed from {@code qits.idp.clients} leaves its commissioned clients able to authenticate and
- * entitled to nothing, which is refused as {@code invalid_target}. Per-context scoping is the
- * declared follow-up and is what will put a narrower set on the row itself.
+ * <p><b>A commissioned client is issued its owner's audiences and roles</b>, read here at mint time
+ * rather than copied into the row: a credential commissioned by qits-ci can be used where qits-ci
+ * can be used, so nothing has to be enumerated before the credentials can replace the static ones.
+ * Two consequences worth knowing: narrowing an owner's audiences narrows every credential it
+ * commissioned, at once; and an owner removed from {@code qits.idp.clients} leaves its commissioned
+ * clients able to authenticate and entitled to nothing, which is refused as {@code invalid_target}.
+ *
+ * <p><b>Claims are the one thing a commission may say for itself</b>, and that is the per-context
+ * scoping the plan declared. {@link #asClient} merges in one direction only — the owner's grants
+ * first, then the row's <em>over</em> them — so a commission narrows its credential and can never
+ * hand it something the deployment did not configure. {@link CommissionedClaims} is the rule; a row
+ * that states nothing is exactly the inheritance this class has always done, which is every row
+ * written before that column existed.
  */
 @ApplicationScoped
 public class ClientRegistry {
@@ -87,6 +94,28 @@ public class ClientRegistry {
         ClientSecret.stored(stored.secretHash()),
         owner == null ? List.of() : owner.audiences(),
         owner == null ? List.of() : owner.roles(),
-        owner == null ? Map.of() : owner.claims());
+        claimsFor(owner, stored));
+  }
+
+  /**
+   * The owner's granted claims, with this commission's own stated over them.
+   *
+   * <p><b>The row wins per name, and only per name.</b> A commission that states {@code project}
+   * replaces the owner's {@code project} and leaves the owner's other grants alone — so scoping one
+   * claim never silently drops another, and a row that states nothing is the plain inheritance this
+   * has always been. The direction is safe because {@link CommissionedClaims} refuses the wildcard:
+   * whatever the row puts here is a concrete value, which every resource service reads as narrower
+   * than both {@code *} and an absent claim.
+   */
+  private static Map<String, String> claimsFor(IdpClient owner, StoredClient stored) {
+    Map<String, String> granted = owner == null ? Map.of() : owner.claims();
+    if (stored.claims().isEmpty()) {
+      return granted;
+    }
+    // LinkedHashMap, like everywhere else claims are built: the token's claim order follows
+    // ClaimNames.GRANTABLE rather than a hash.
+    Map<String, String> merged = new LinkedHashMap<>(granted);
+    merged.putAll(stored.claims());
+    return Collections.unmodifiableMap(merged);
   }
 }

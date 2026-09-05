@@ -40,7 +40,8 @@ public class IdpDynamicClient extends PanacheEntityBase {
 
   /**
    * The client that commissioned this one. Only that client — or this one itself — may decommission
-   * it, and this credential's audiences and claims are read from the owner's record at mint time.
+   * it, and this credential's audiences are read from the owner's record at mint time. So are the
+   * claims it did not state for itself — see {@link #claims}.
    */
   @Column(name = "owner", nullable = false, length = 128)
   public String owner;
@@ -52,6 +53,19 @@ public class IdpDynamicClient extends PanacheEntityBase {
   /** Which context of that kind, in the owner's own spelling. Opaque here. */
   @Column(name = "context_id", nullable = false, length = 256)
   public String contextId;
+
+  /**
+   * What this commission said its context is <em>about</em>: the structured claims stated when it
+   * was made, as {@code name=value} lines. Null when it stated none, which is the ordinary case and
+   * every row written before the column existed.
+   *
+   * <p>{@link eu.wohlben.qits.idp.control.CommissionedClaims} owns the format, the accepted values
+   * and the one rule that bounds them — a commission narrows, never widens — and is where to read
+   * before touching this. The two context fields above say <b>which</b> context this credential
+   * belongs to, for a reconcile; this one says what a resource service may let it act on.
+   */
+  @Column(name = "claims", length = 1024)
+  public String claims;
 
   @Column(name = "created_at", nullable = false)
   public Instant createdAt;

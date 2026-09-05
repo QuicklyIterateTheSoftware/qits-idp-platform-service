@@ -269,6 +269,13 @@ Two things about the shipped V1:
   writes it first and sees nothing happen. Per-context scoping brings them back with the code that
   reads them.
 
+  **V5 is that follow-up for `claims`**, and it keeps V2's bargain: the column comes back together
+  with its reader (`ClientRegistry.claimsFor`) and its rule (`CommissionedClaims`). It holds
+  `name=value` lines and not JSON — the vocabulary is closed at three names and the accepted value
+  charset excludes `=` and the newline, so nothing needs escaping and the `idp` module needs no
+  Jackson. Nullable, and null is what every row written before it says: inherit the owner's claims,
+  exactly as before. `audiences` stays gone — a commissioned credential is still issued its owner's.
+
   The `add column … not null` statements have no default, so they fail loudly against a table that
   turned out to hold rows. That is deliberate: nothing had ever written this table, and if that were
   somehow wrong it is worth stopping for.
@@ -298,7 +305,13 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   no plaintext, decommission stops the minting on the very next request, only the owner (or the
   credential itself) may delete, a commissioned client may not commission, and the listing is the
   caller's own. The suite shares one application and therefore one store, so **every test names its
-  own `contextKind`** and the listing case filters on it instead of assuming an empty table.
+  own `contextKind`** and the listing case filters on it instead of assuming an empty table. Its
+  scoping half asserts the direction rather than the plumbing: a stated claim reaches the token and
+  the row, it overrides the owner's grant for that name and leaves the owner's others alone, `*` and
+  an invented name are both 400 with nothing written, and a commission that states nothing is the
+  inheritance it always was. `CommissionedClaimsTest` is the same rule as plain unit tests, including
+  what a hand-edited column must do — drop what it cannot read, never throw, because that parse runs
+  on the token path for every commissioned credential.
 - `UserAuthenticationTest` is the user surface end to end, and its cases are the invariants: a
   register token makes exactly one account, the two bootstrap roles are granted as rows, the cookie
   carries exactly the attributes the plan fixed, a session introspects until it is revoked and not

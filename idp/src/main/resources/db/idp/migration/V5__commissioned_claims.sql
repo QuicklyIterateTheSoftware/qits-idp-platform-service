@@ -1,0 +1,26 @@
+-- Per-context scoping: the `claims` column comes back, with the reader.
+--
+-- V2 DROPPED THIS COLUMN ON PURPOSE and said why: "a commissioned client is issued its OWNER's
+-- audiences and claims ... Per-context scoping is the declared follow-up, and it brings them back
+-- together with the code that reads them. A column no reader has is not forward compatibility; it
+-- is a trap for whoever writes it first and sees nothing happen." This is that follow-up, and the
+-- reader lands in the same change — ClientRegistry merges what is here over the owner's grants,
+-- and CommissionedClaims owns the format and the rule.
+--
+-- WHAT IT HOLDS: `name=value` lines, one per stated claim, in ClaimNames.GRANTABLE order. Not JSON.
+-- The vocabulary is closed at three names and the accepted value charset excludes both `=` and the
+-- newline, so there is nothing to escape and nothing to parse defensively — and the `idp` module
+-- carries no Jackson, which a json column would have to add for three names. A `select claims from
+-- idp_client` stays readable, which is where an operator asks why a credential is scoped as it is.
+--
+-- NULLABLE, AND NULL IS THE ORDINARY CASE. Every row written before this migration states nothing,
+-- and that reads exactly as it did yesterday: the credential is issued its owner's claims and no
+-- others. No owner that commissions holds a `project` claim today, so this migration changes no
+-- live token — a workspace credential gains its claim when its container is next recreated and the
+-- commission is made again, not when this runs.
+--
+-- 1024 is four times the widest a full statement can be (three names, 256 characters of value each,
+-- plus separators is 813) and it costs nothing in postgres, where a varchar's declared length is a
+-- constraint rather than an allocation.
+
+alter table idp_client add column claims varchar(1024);
