@@ -22,9 +22,11 @@ test that refuses to let the datasource baseline go missing. `<repositories>` in
 at `${qits.maven.repository.url}` (the developer-host address by default); the image build overrides
 it with `--build-arg QITS_MAVEN_REPOSITORY_URL`, and `.qits-maven-settings.xml` mirrors the
 `qits-maven` repository id onto that address — an exact id match, which is what gets past Maven's
-`external:http:*` blocker without permitting arbitrary HTTP repositories. The docker build moved to
-`--network host` in the same commit, because buildkit needs it to reach the registry at all. Those
-three files move together; a third platform jar needs none of them again.
+`external:http:*` blocker without permitting arbitrary HTTP repositories. The build runs on the
+platform builder now (`build: true` + buildctl, the wrapper's qits-buildkit-plan.md), whose RUNs
+execute on the platform network — so the address the build-arg carries is `$QITS_MAVEN_REGISTRY_URL`
+and no host networking is involved. Those three files move together; a third platform jar needs
+none of them again.
 
 **The baseline is not a formality here.** Every other service asks this one for a token, so a
 postgres cutover that fails this pool fails the platform's whole call graph rather than one
