@@ -35,10 +35,15 @@ import org.jboss.logging.Logger;
  * its own copy of a row deleted at the first, and that is the day this needs a bounded entry age or
  * an eviction announcement rather than a bigger cache.
  *
- * <p><b>What is not stored: audiences and claims.</b> A commissioned client is issued its owner's,
- * read from the owner's record when a token is minted ({@link ClientRegistry}). Full access for
- * now, per the plan; the row carries owner + context kind + id so that per-context scoping has
- * something to attach to when it lands.
+ * <p><b>What is not stored: audiences.</b> A commissioned client is issued its owner's, read from
+ * the owner's record when a token is minted ({@link ClientRegistry}).
+ *
+ * <p><b>Claims are stored, and that is the per-context scoping the plan declared.</b> A commission
+ * may state what its context is about — {@code project=<id>} for a workspace, and the rest of
+ * {@link ClaimNames#GRANTABLE} — and those land on the row, narrowing what the credential may act
+ * on wherever a resource service reads a claim. Anything it does not state it still inherits from
+ * its owner. The rule that bounds it, and the reason there is no "the owner must hold it" check,
+ * is in {@link CommissionedClaims}.
  */
 @ApplicationScoped
 public class DynamicClients {
@@ -64,13 +69,18 @@ public class DynamicClients {
   /** As long as the column allows. The owner's own spelling, stored and never interpreted. */
   private static final int CONTEXT_ID_LENGTH = 256;
 
-  /** A row as everything outside persistence sees it — a record, so nothing caches a live entity. */
+  /**
+   * A row as everything outside persistence sees it — a record, so nothing caches a live entity.
+   *
+   * @param claims the claims this commission stated, already parsed. Empty is the ordinary case.
+   */
   public record StoredClient(
       String clientId,
       String secretHash,
       String owner,
       String contextKind,
       String contextId,
+      Map<String, String> claims,
       Instant createdAt) {}
 
   /** A fresh commission, with the plaintext secret that exists only in this answer. */
@@ -84,10 +94,13 @@ public class DynamicClients {
    * Commission a credential for one context.
    *
    * @param owner the client id of the caller, already authenticated
+   * @param claims what this commission says its context is about, or null/empty for none — see
+   *     {@link CommissionedClaims}, which is what decides whether a stated claim is acceptable
    * @throws OAuthException {@code invalid_request} (400) when the context kind or id is not one
-   *     this service will put in a client id and a row
+   *     this service will put in a client id and a row, or a stated claim is not one it will grant
    */
-  public Commissioned commission(String owner, String contextKind, String contextId) {
+  public Commissioned commission(
+      String owner, String contextKind, String contextId, Map<String, String> claims) {
     String kind = contextKind == null ? "" : contextKind.trim();
     String context = contextId == null ? "" : contextId.trim();
     if (!CONTEXT_KIND.matcher(kind).matches()) {
@@ -98,6 +111,9 @@ public class DynamicClients {
       throw OAuthException.invalidRequest(
           "contextId is required and must be at most " + CONTEXT_ID_LENGTH + " characters");
     }
+    // Validated BEFORE anything is generated or written: a refused claim must cost the caller a 400
+    // and leave no row and no secret behind.
+    Map<String, String> stated = CommissionedClaims.stated(claims);
 
     String secret = randomToken(32);
     IdpDynamicClient row = new IdpDynamicClient();
@@ -106,6 +122,7 @@ public class DynamicClients {
     row.owner = owner;
     row.contextKind = kind;
     row.contextId = context;
+    row.claims = CommissionedClaims.format(stated);
     row.createdAt = Instant.now();
 
     // A bare insert, so DbRetry.inNewTx rather than DbRetry.call: it owns the transaction boundary
@@ -118,9 +135,14 @@ public class DynamicClients {
     cache.put(stored.clientId(), stored);
     // The context id is not logged: it is the caller's string and the generated client id already
     // carries a slug of it, which is enough to find the context and is bounded by construction.
+    // The claim NAMES, never their values: a value is the caller's string about its own context,
+    // exactly like the context id above, and the same rule applies to it.
     LOG.infof(
-        "commissioned client %s for owner %s, context kind %s",
-        LoggableClientId.of(stored.clientId()), LoggableClientId.of(owner), kind);
+        "commissioned client %s for owner %s, context kind %s, scoped by %s",
+        LoggableClientId.of(stored.clientId()),
+        LoggableClientId.of(owner),
+        kind,
+        stated.isEmpty() ? "nothing" : stated.keySet());
     return new Commissioned(stored, secret);
   }
 
@@ -196,7 +218,13 @@ public class DynamicClients {
 
   private static StoredClient toStored(IdpDynamicClient row) {
     return new StoredClient(
-        row.clientId, row.secretHash, row.owner, row.contextKind, row.contextId, row.createdAt);
+        row.clientId,
+        row.secretHash,
+        row.owner,
+        row.contextKind,
+        row.contextId,
+        CommissionedClaims.parse(row.claims),
+        row.createdAt);
   }
 
   /**

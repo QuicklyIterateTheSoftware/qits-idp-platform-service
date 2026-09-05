@@ -18,6 +18,7 @@ import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
+import java.util.Map;
 import org.jboss.resteasy.reactive.RestResponse;
 
 /**
@@ -40,8 +41,12 @@ import org.jboss.resteasy.reactive.RestResponse;
  * exactly one answer in this service to "is this who it says it is".
  *
  * <p>A token-based guard would be the right call the day these endpoints need per-caller
- * permissions beyond "is it a service client" — that is the same day per-context scoping lands, and
- * it can bring its own audience then.
+ * permissions beyond "is it a service client", and it can bring its own audience then. <b>Per-context
+ * scoping was expected to be that day and turned out not to be.</b> A commission may now state the
+ * claims its credential carries, and that needed no per-caller permission at all: the states it may
+ * ask for are narrowings, so every caller may ask for every one of them and the answer does not
+ * depend on which service is asking. See {@code CommissionedClaims} for why the wildcard is the one
+ * value that is not.
  *
  * <p><b>Only a static service client may commission.</b> A commissioned credential authenticates
  * here (it has to, so a context can hand its own credential back), but {@code POST} refuses it:
@@ -56,12 +61,33 @@ import org.jboss.resteasy.reactive.RestResponse;
 @Produces(MediaType.APPLICATION_JSON)
 public class IdpClientsController {
 
-  /** What a caller asks for: which context this credential is being commissioned for. */
-  public record CommissionRequest(String contextKind, String contextId) {}
+  /**
+   * What a caller asks for: which context this credential is being commissioned for, and — since
+   * per-context scoping landed — what that context is <em>about</em>.
+   *
+   * <p>{@code claims} is optional and absent is the ordinary case. A caller that states one narrows
+   * the credential it is about to receive: a workspace commission says {@code
+   * {"project":"<projectId>"}}, and every resource service that reads a {@code project} claim then
+   * judges that credential on the project rather than on the platform role alone. The names it may
+   * use and the values it may state are {@code CommissionedClaims}' to decide — notably not {@code
+   * *}, because a commission narrows and never widens.
+   *
+   * <p><b>A body that omits it binds to null</b>, which is every caller written before scoping
+   * existed and is read as "states nothing". One canonical constructor and no second one: Jackson
+   * binds a record through the canonical constructor, and a convenience overload nobody calls would
+   * be dead code standing where an ambiguity could grow.
+   */
+  public record CommissionRequest(
+      String contextKind, String contextId, Map<String, String> claims) {}
 
   /**
    * The answer to a commission. <b>The secret is in this response and nowhere else</b> — the store
    * holds a hash — so a caller that loses it decommissions and commissions again.
+   *
+   * <p>{@code claims} is what was actually granted, not what was asked for. They are the same thing
+   * whenever the call succeeds — a claim this service will not grant is a 400, never a quiet drop —
+   * and echoing them is what lets a caller assert the scoping it asked for without minting a token
+   * to look inside.
    */
   public record CommissionResponse(
       String clientId,
@@ -69,11 +95,17 @@ public class IdpClientsController {
       String owner,
       String contextKind,
       String contextId,
+      Map<String, String> claims,
       String createdAt) {}
 
   /** One live commission, as the owner's reconcile reads it. No secret, ever. */
   public record CommissionView(
-      String clientId, String owner, String contextKind, String contextId, String createdAt) {}
+      String clientId,
+      String owner,
+      String contextKind,
+      String contextId,
+      Map<String, String> claims,
+      String createdAt) {}
 
   @Inject BasicCaller caller;
 
@@ -109,7 +141,8 @@ public class IdpClientsController {
     }
 
     Commissioned issued =
-        dynamicClients.commission(owner.clientId(), request.contextKind(), request.contextId());
+        dynamicClients.commission(
+            owner.clientId(), request.contextKind(), request.contextId(), request.claims());
     StoredClient client = issued.client();
     return RestResponse.ResponseBuilder.create(
             Response.Status.CREATED,
@@ -119,6 +152,7 @@ public class IdpClientsController {
                 client.owner(),
                 client.contextKind(),
                 client.contextId(),
+                client.claims(),
                 client.createdAt().toString()))
         // The body holds a credential. Same rule as the token response, same reason.
         .header(HttpHeaders.CACHE_CONTROL, "no-store")
@@ -146,6 +180,7 @@ public class IdpClientsController {
                     client.owner(),
                     client.contextKind(),
                     client.contextId(),
+                    client.claims(),
                     client.createdAt().toString()))
         .toList();
   }
