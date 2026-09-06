@@ -16,7 +16,7 @@ import java.util.UUID;
  *
  * <p><b>The strings are namespaced and opaque here.</b> The shape is {@code $app:$resource:$role}
  * and the middle segment is simply omitted until something needs it, so the two rows a bootstrap
- * registration writes read {@code qits-platform:admin} and {@code qits:admin}. The idp stores them
+ * registration writes read {@code qits:admin} and {@code qits:admin}. The idp stores them
  * and interprets none of them: what a role permits is a later plan, and until it lands the roles
  * travel to the edge, into {@code X-Qits-Roles}, and are enforced by nobody.
  *

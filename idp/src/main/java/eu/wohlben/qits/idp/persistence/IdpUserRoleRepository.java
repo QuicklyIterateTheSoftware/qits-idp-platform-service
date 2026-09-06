@@ -20,7 +20,7 @@ public class IdpUserRoleRepository
    *
    * <p><b>Sorted here rather than with an {@code order by}, and that was measured.</b> Postgres
    * orders by the database's collation, which at its primary strength ignores punctuation — so
-   * {@code qits:admin} sorts <i>before</i> {@code qits-platform:admin} there and after it in Java.
+   * {@code qits:admin} sorts <i>before</i> {@code qits:admin} there and after it in Java.
    * Neither is wrong, but only one of them is the same on every installation, and this list leaves
    * the service. Two roles is not a page of rows to sort in memory, and the day it is, this is the
    * method that grows a collation-pinned index rather than the caller growing a surprise.

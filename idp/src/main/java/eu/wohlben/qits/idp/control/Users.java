@@ -43,7 +43,7 @@ public class Users {
    * anyway: nothing enforces one, and the enforcement plan is where a roster becomes a question
    * worth configuring.
    */
-  public static final List<String> BOOTSTRAP_ROLES = List.of("qits-platform:admin", "qits:admin");
+  public static final List<String> BOOTSTRAP_ROLES = List.of("qits:admin");
 
   /** As long as the column allows. A name is an identity, not a document. */
   private static final int USERNAME_LENGTH = 128;

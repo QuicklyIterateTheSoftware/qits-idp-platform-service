@@ -435,7 +435,7 @@ public class IdpPackagedSurfaceIT {
         .then()
         .statusCode(200)
         .body("username", equalTo(username))
-        .body("roles", hasItems("qits-platform:admin", "qits:admin"));
+        .body("roles", hasItems("qits:admin"));
 
     given()
         .cookie("qits-session", session)

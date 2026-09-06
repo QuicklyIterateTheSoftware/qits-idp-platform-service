@@ -221,7 +221,7 @@ is the decision that makes a passkey's binding to one host a non-issue.
 The user row is minimal on purpose — an id, a unique username, an optional password hash — and
 **there is no role column**. Roles are `idp_user_role`, an assignment table, from day one. The
 strings are namespaced `$app:$resource:$role` with the middle segment omitted while unused; a
-bootstrap registration grants `qits-platform:admin` and `qits:admin` and nothing else writes the
+bootstrap registration grants `qits:admin` and `qits:admin` and nothing else writes the
 table today. The idp stores them and interprets none of them.
 
 ### Getting the first account
@@ -281,7 +281,7 @@ credential:
     curl -s -u prod-qits-edge:$SECRET -H 'Content-Type: application/json' \
       -d '{"token":"<cookie value>"}' \
       http://qits-platform-idp:8080/idp/api/sessions/introspect
-    # 200 {"userId":"…","username":"alice","roles":["qits-platform:admin","qits:admin"],
+    # 200 {"userId":"…","username":"alice","roles":["qits:admin"],
     #      "expiresAt":"2026-08-15T05:48:00.427825Z"}
     # 404 for anything not live — unknown, expired or revoked alike
 

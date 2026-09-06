@@ -87,9 +87,9 @@ public class UserAuthenticationTest {
     // would vary the header. It is Java's, deliberately, and not the database's — see
     // IdpUserRoleRepository, where a postgres collation was measured putting these two the other
     // way round.
-    registered.then().body("roles", equalTo(List.of("qits-platform:admin", "qits:admin")));
+    registered.then().body("roles", equalTo(List.of("qits:admin")));
     assertEquals(
-        List.of("qits-platform:admin", "qits:admin"),
+        List.of("qits:admin"),
         inTx(() -> roles.rolesOf(UUID.fromString(userId))),
         "the roles are rows, not a column");
 
@@ -115,7 +115,7 @@ public class UserAuthenticationTest {
         .body("userId", equalTo(userId))
         .body("username", equalTo(username))
         .body("expiresAt", equalTo(registered.jsonPath().getString("expiresAt")))
-        .body("roles", hasItems("qits-platform:admin", "qits:admin"));
+        .body("roles", hasItems("qits:admin"));
 
     // And the passkey logs in again, in a browser that kept no session.
     CookieFilter secondVisit = new CookieFilter();
