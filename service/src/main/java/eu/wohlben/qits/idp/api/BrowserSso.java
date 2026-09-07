@@ -22,8 +22,11 @@ import java.util.Set;
 @ApplicationScoped
 public class BrowserSso {
 
-  /** The prefix that turns an allow-list entry into a one-label wildcard. */
+  /** The prefix that turns an allow-list entry into a wildcard over its leading labels. */
   private static final String WILDCARD = "*.";
+
+  /** How many labels a wildcard entry admits in front of its authority. */
+  private static final int WILDCARD_LABELS = 2;
 
   @ConfigMapping(prefix = "qits.idp.browser-sso")
   interface Config {
@@ -36,12 +39,14 @@ public class BrowserSso {
      *
      * <p>An entry is either an exact authority (<code>dev.wohlben.eu</code>,
      * <code>localhost:8080</code>) or the one wildcard form <code>*.&lt;authority&gt;</code>, which
-     * matches exactly one extra label in front of that authority and nothing else: with
-     * <code>*.dev.wohlben.eu</code> the host <code>ci.dev.wohlben.eu</code> is allowed, while
-     * <code>a.b.dev.wohlben.eu</code> and the bare <code>dev.wohlben.eu</code> are not. The port is
-     * part of the authority, so <code>*.dev.localhost:8080</code> allows
+     * matches <em>one or two</em> extra labels in front of that authority and nothing else: with
+     * <code>*.dev.wohlben.eu</code> the hosts <code>ci.dev.wohlben.eu</code> and
+     * <code>editor.qits.dev.wohlben.eu</code> are allowed, while
+     * <code>a.editor.qits.dev.wohlben.eu</code> and the bare <code>dev.wohlben.eu</code> are not.
+     * The port is part of the authority, so <code>*.dev.localhost:8080</code> allows
      * <code>ci.dev.localhost:8080</code> and refuses <code>ci.dev.localhost:9090</code>. One
-     * wildcard entry covers every per-service host of an environment.
+     * wildcard entry covers every per-service host of an environment, and the second label covers
+     * the per-project hosts of the editor tier (<code>editor.&lt;project&gt;.&lt;env&gt;</code>).
      */
     @WithDefault("localhost:8080")
     List<String> browserHosts();
@@ -117,19 +122,47 @@ public class BrowserSso {
     return canonical.getScheme() + "://" + host + path(requestedPath);
   }
 
-  /** Whether the allow-list names this authority, by an exact entry or a wildcard one. */
+  /**
+   * Whether the allow-list names this authority, by an exact entry or a wildcard one.
+   *
+   * <p>A wildcard entry admits <b>one or two</b> labels in front of its authority — one for the
+   * per-service hosts of an environment (<code>ci.&lt;env&gt;.&lt;domain&gt;</code>), two for the
+   * per-project hosts of the editor tier (<code>editor.&lt;project&gt;.&lt;env&gt;.&lt;domain&gt;
+   * </code>). The bound stays at two rather than becoming open-ended, so the rule remains something
+   * a reader can check by counting dots.
+   *
+   * <p><b>Why the second label is safe.</b> Every wildcard entry this installation carries is
+   * anchored under the platform's own domain — the bootstrap renders the list as
+   * <code>&lt;domain&gt;,&lt;env&gt;.&lt;domain&gt;,*.&lt;domain&gt;,*.&lt;env&gt;.&lt;domain&gt;
+   * </code> — and the platform's DNS zone points <code>*</code>, <code>*.*</code> and
+   * <code>*.*.*</code> at the platform's own edge, where a name no vhost claims answers 404. So
+   * every authority a second label can add resolves to this platform and to nothing else: the
+   * widening is across platform-served names, not towards a foreign host, and it opens no redirect.
+   * What keeps that true is the anchor, not the label count — the entry's parent authority is a
+   * suffix match, so an extra label can only ever reach deeper <em>under</em> a name the one-label
+   * rule already admitted. An entry whose parent is not the platform's own domain would already
+   * have been an open door at one label; do not add one.
+   */
   boolean allows(String authority) {
     if (hosts.contains(authority)) {
       return true;
     }
     for (String parent : wildcardHosts) {
       int label = authority.length() - parent.length() - 1;
-      // One label and one dot in front of the parent authority, and the port is part of both, so a
-      // different port simply does not end with the parent.
-      if (label > 0
-          && authority.charAt(label) == '.'
-          && authority.endsWith(parent)
-          && authority.lastIndexOf('.', label - 1) < 0) {
+      // The dot in front of the parent authority. The port is part of both, so a different port
+      // simply does not end with the parent.
+      if (label <= 0 || authority.charAt(label) != '.' || !authority.endsWith(parent)) {
+        continue;
+      }
+      // Then count the dots in what is left, refusing an empty label either side of one.
+      int labels = 1;
+      int dot = authority.lastIndexOf('.', label - 1);
+      while (dot > 0 && dot < label - 1 && labels < WILDCARD_LABELS) {
+        labels++;
+        label = dot;
+        dot = authority.lastIndexOf('.', label - 1);
+      }
+      if (dot < 0) {
         return true;
       }
     }

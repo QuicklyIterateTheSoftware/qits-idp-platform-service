@@ -45,7 +45,7 @@ public class BrowserSsoTest {
   }
 
   @Test
-  public void aWildcardEntryAllowsExactlyOneExtraLabel() {
+  public void aWildcardEntryAllowsOneOrTwoExtraLabels() {
     BrowserSso sso =
         sso("https://wohlben.eu", "wohlben.eu", "dev.wohlben.eu", "*.dev.wohlben.eu");
 
@@ -53,12 +53,44 @@ public class BrowserSsoTest {
     assertEquals(
         "https://ci.dev.wohlben.eu/projects",
         sso.returnLocation("ci.dev.wohlben.eu", "/projects"));
-    // Two labels deep is not the environment's own host and falls back to the front door; only the
-    // authority is replaced, the path was safe on its own.
-    assertEquals("https://wohlben.eu/projects", sso.returnLocation("a.b.dev.wohlben.eu", "/projects"));
+    // Two: the editor tier, editor.<project>.<env>.<domain>. The same entry covers it, because
+    // every name it can match is served by this platform's own edge.
+    assertEquals(
+        "https://editor.qits.dev.wohlben.eu/projects",
+        sso.returnLocation("editor.qits.dev.wohlben.eu", "/projects"));
+    // Three is nothing the edge serves and falls back to the front door; only the authority is
+    // replaced, the path was safe on its own.
+    assertEquals(
+        "https://wohlben.eu/projects",
+        sso.returnLocation("a.editor.qits.dev.wohlben.eu", "/projects"));
     // The wildcard does not name its own parent; the exact entry beside it does.
     assertEquals("https://dev.wohlben.eu/", sso.returnLocation("dev.wohlben.eu", "/"));
     assertEquals("https://wohlben.eu/", sso.returnLocation("evil.example", "/"));
+    // A foreign host that merely ends in the same labels is a different authority.
+    assertEquals("https://wohlben.eu/", sso.returnLocation("evil-dev.wohlben.eu.example", "/"));
+  }
+
+  @Test
+  public void theEditorTierIsAdmittedByTheDomainWideEntryToo() {
+    // The list the bootstrap renders: <domain>, <env>.<domain>, *.<domain>, *.<env>.<domain>.
+    BrowserSso sso =
+        sso(
+            "https://idp.wohlben.dev",
+            Optional.of("wohlben.dev"),
+            "wohlben.dev",
+            "dev.wohlben.dev",
+            "*.wohlben.dev",
+            "*.dev.wohlben.dev");
+
+    assertEquals(
+        "https://editor.qits.dev.wohlben.dev/edit",
+        sso.returnLocation("editor.qits.dev.wohlben.dev", "/edit"));
+    // Two labels under the domain-wide entry, which is the same environment host set.
+    assertEquals(
+        "https://ci.dev.wohlben.dev/", sso.returnLocation("ci.dev.wohlben.dev", "/"));
+    // Four labels deep is still refused, by every entry on the list.
+    assertEquals(
+        "https://wohlben.dev/", sso.returnLocation("a.editor.qits.dev.wohlben.dev", "/"));
   }
 
   @Test
@@ -66,9 +98,16 @@ public class BrowserSsoTest {
     BrowserSso sso = sso("http://dev.localhost:8080", "dev.localhost:8080", "*.dev.localhost:8080");
 
     assertEquals("http://ci.dev.localhost:8080/", sso.returnLocation("ci.dev.localhost:8080", "/"));
-    // A host that matches by name but not by port is a different authority.
+    assertEquals(
+        "http://editor.qits.dev.localhost:8080/",
+        sso.returnLocation("editor.qits.dev.localhost:8080", "/"));
+    // A host that matches by name but not by port is a different authority, at either depth.
     assertEquals("http://dev.localhost:8080/", sso.returnLocation("ci.dev.localhost:9090", "/"));
     assertEquals("http://dev.localhost:8080/", sso.returnLocation("ci.dev.localhost", "/"));
+    assertEquals(
+        "http://dev.localhost:8080/", sso.returnLocation("editor.qits.dev.localhost:9090", "/"));
+    assertEquals(
+        "http://dev.localhost:8080/", sso.returnLocation("editor.qits.dev.localhost", "/"));
   }
 
   @Test
@@ -79,6 +118,8 @@ public class BrowserSsoTest {
         "http://dev.wohlben.eu/projects/7?tab=runs",
         sso.returnLocation("dev.wohlben.eu", "/projects/7?tab=runs"));
     assertEquals("http://localhost:8080/", sso.returnLocation("ci.dev.wohlben.eu", "/"));
+    // An exact entry names one authority and never a label in front of it, at either depth.
+    assertEquals("http://localhost:8080/", sso.returnLocation("editor.qits.dev.wohlben.eu", "/"));
     // Still no open redirect through the path either.
     assertEquals("http://localhost:8080/", sso.returnLocation("evil.example", "//evil.example"));
   }
