@@ -5,6 +5,7 @@ import eu.wohlben.qits.idp.control.IdpClient;
 import eu.wohlben.qits.idp.error.OAuthException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.util.List;
 
 /**
  * "Who is calling", for the machine surfaces: the commission API, session introspection, and
@@ -28,6 +29,13 @@ import jakarta.inject.Inject;
 public class BasicCaller {
 
   public static final String PLATFORM_SYSTEM = "qits-platform:system";
+
+  /**
+   * The agent role. Every read route here accepts it beside the roles it accepted before: agents
+   * keep every read they have and lose only write access (user ruling 2026-09-12,
+   * principal-bound-git-refs-plan.md). Write routes do not accept it.
+   */
+  public static final String AGENT = "qits:agent";
 
   @Inject ClientRegistry registry;
 
@@ -66,6 +74,21 @@ public class BasicCaller {
       throw OAuthException.accessDenied("the client lacks role " + role);
     }
     return caller;
+  }
+
+  /**
+   * Require at least one of these roles after the Basic pair has authenticated. A read route uses
+   * it to accept {@link #AGENT} beside its old role.
+   *
+   * @throws OAuthException {@code access_denied} (403) when the caller holds none of them
+   */
+  public IdpClient requireAnyRole(IdpClient caller, String... roles) {
+    for (String role : roles) {
+      if (caller.roles().contains(role)) {
+        return caller;
+      }
+    }
+    throw OAuthException.accessDenied("the client lacks every role of " + List.of(roles));
   }
 
   /** Authenticate a configured service client and require its machine role. */

@@ -225,6 +225,9 @@ The rules around them:
   line means the owner's roles. Nothing sets one yet; phase 4 of the plan sets the agent kinds to
   `qits:agent`. A `clients/…` role there makes those credentials unusable (400). A credential may
   always hand itself back (`DELETE` of its own id), whatever roles its kind gives it.
+- **Reads accept `qits:agent`; writes do not.** Agents keep every read they have and lose only
+  write access (user ruling 2026-09-12). Here that is `GET /idp/api/clients`, which accepts
+  `qits-platform:system` or `qits:agent`. `POST`, `PUT` and `DELETE` are unchanged.
 - **Its Git refs are its own.** The optional `gitRefs` member states what the credential may push;
   every token then carries it as `git_refs`. Not stated means no claim, as before. The rules, each a
   400 with nothing written: every entry starts with `refs/heads/`; `*` only as a trailing `/*`; at

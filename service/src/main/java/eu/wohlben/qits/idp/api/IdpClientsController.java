@@ -188,11 +188,16 @@ public class IdpClientsController {
    *
    * <p><b>Only the caller's own.</b> There is no listing across owners and no way to ask for
    * another's, because a service's live contexts are its own business.
+   *
+   * <p><b>A read, so {@code qits:agent} is accepted too.</b> An agent keeps every read it had while
+   * it carried its owner's roles; only writes are restricted. It commissions nothing, so its own
+   * listing is empty — the answer it got before.
    */
   @GET
   public List<CommissionView> list(@HeaderParam(HttpHeaders.AUTHORIZATION) String authorization) {
     IdpClient owner =
-        caller.requireRole(caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM);
+        caller.requireAnyRole(
+            caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM, BasicCaller.AGENT);
     return dynamicClients.listOwnedBy(owner.clientId()).stream()
         .map(IdpClientsController::view)
         .toList();

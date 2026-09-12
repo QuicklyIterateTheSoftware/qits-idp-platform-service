@@ -119,6 +119,11 @@ standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is wha
 The roles per commission kind (`qits.idp.commission.roles.<kind>`, `CommissionRoles`) are such a
 place: `ClientRegistry.rolesFor` calls `refuseReserved` on them.
 
+**Every read route accepts `qits:agent`; no write route does** (user ruling 2026-09-12: agents keep
+every read and lose only write access). Today the one read route with a role check is `GET
+/api/clients` (`BasicCaller.requireAnyRole`); the others are public or session-based. A new read
+route with a role check accepts `BasicCaller.AGENT` too; a new write route does not.
+
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
 identity to whoever asks. `IdpTokenTest.aClientWithNoSecretIsUnusableRatherThanOpen` runs against

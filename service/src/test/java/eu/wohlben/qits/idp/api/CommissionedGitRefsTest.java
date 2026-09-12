@@ -295,19 +295,37 @@ public class CommissionedGitRefsTest {
     Commission agent = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-10", null));
     Commission other = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-11", null));
 
-    // It lacks the platform role, so the owner-side verbs stay shut to it.
-    given()
-        .header("Authorization", basic(agent.clientId(), agent.secret()))
-        .when()
-        .get("/idp/api/clients")
-        .then()
-        .statusCode(403);
+    // It lacks the platform role, so it may not decommission another credential.
     decommission(agent.clientId(), agent.secret(), other.clientId()).statusCode(403);
 
     // But giving back its own credential needs no role.
     decommission(agent.clientId(), agent.secret(), agent.clientId()).statusCode(204);
     token(agent.clientId(), agent.secret()).statusCode(401);
     decommission(OWNER, OWNER_SECRET, other.clientId()).statusCode(204);
+  }
+
+  @Test
+  public void anAgentKeepsItsReadsAndLosesOnlyWrites() {
+    // User ruling 2026-09-12: agents keep every read; only writes are restricted. The agent-test
+    // kind carries qits:agent instead of its owner's roles.
+    Commission agent = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-12", null));
+
+    // The one read route with a role check: the listing. It commissions nothing, so it is empty —
+    // the answer it got while it carried its owner's roles.
+    given()
+        .header("Authorization", basic(agent.clientId(), agent.secret()))
+        .when()
+        .get("/idp/api/clients")
+        .then()
+        .statusCode(200)
+        .body("size()", equalTo(0));
+
+    // The writes stay shut: it may not commission, and may not change a commission.
+    commission(agent.clientId(), agent.secret(), body("agent-test", "ctx-12-child", null))
+        .statusCode(403);
+    replace(agent.clientId(), agent.secret(), agent.clientId(), List.of()).statusCode(403);
+
+    decommission(OWNER, OWNER_SECRET, agent.clientId()).statusCode(204);
   }
 
   // --- the migration --------------------------------------------------------------------------
