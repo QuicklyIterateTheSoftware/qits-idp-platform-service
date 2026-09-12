@@ -25,6 +25,14 @@ public class IdpWorkstationRefreshToken extends PanacheEntityBase {
   @Column(name = "family_id", nullable = false)
   public UUID familyId;
 
+  /**
+   * The public client this family belongs to.  A refresh token of one client is refused for the
+   * other, and the signed-in devices page reads this to say whether a row is a CLI or a Git
+   * workstation.
+   */
+  @Column(name = "client_id", nullable = false, length = 255)
+  public String clientId;
+
   @Column(name = "token_hash", nullable = false, length = 255, unique = true)
   public String tokenHash;
 

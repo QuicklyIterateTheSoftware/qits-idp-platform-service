@@ -96,20 +96,34 @@ public class WorkstationOAuthTest {
   }
 
   @Test
-  public void authorizeRejectsAnonymousAndNonLoopbackRedirects() {
-    given()
-        .redirects()
-        .follow(false)
-        .queryParam("response_type", "code")
-        .queryParam("client_id", CLIENT)
-        .queryParam("redirect_uri", REDIRECT)
-        .queryParam("code_challenge", challenge(VERIFIER))
-        .queryParam("code_challenge_method", "S256")
-        .queryParam("audience", AUDIENCE)
-        .when()
-        .get("/idp/authorize")
-        .then()
-        .statusCode(401);
+  public void authorizeBouncesAnonymousToSignInAndRejectsNonLoopbackRedirects() {
+    // CHANGED WITH THE CLI CLIENT, and it applies to the workstation too: an anonymous /authorize
+    // is a person who has not signed in yet, which is the normal first step rather than an error.
+    // The 401 it used to answer left a browser with nothing to do; the bounce carries this very
+    // request back as the login page's return location.
+    String bounce =
+        given()
+            .redirects()
+            .follow(false)
+            .queryParam("response_type", "code")
+            .queryParam("client_id", CLIENT)
+            .queryParam("redirect_uri", REDIRECT)
+            .queryParam("code_challenge", challenge(VERIFIER))
+            .queryParam("code_challenge_method", "S256")
+            .queryParam("audience", AUDIENCE)
+            .when()
+            .get("/idp/authorize")
+            .then()
+            .statusCode(303)
+            .extract()
+            .header("Location");
+    org.junit.jupiter.api.Assertions.assertTrue(
+        bounce.startsWith("http://localhost:8080/idp/login?"), bounce);
+    assertEquals("localhost:8080", CliOAuthTest.param(bounce, "return_host"));
+    String returnPath = CliOAuthTest.param(bounce, "return_path");
+    org.junit.jupiter.api.Assertions.assertTrue(
+        returnPath.startsWith("/idp/authorize?"), returnPath);
+    org.junit.jupiter.api.Assertions.assertTrue(returnPath.contains("client_id=" + CLIENT), returnPath);
 
     Sessions.Opened session = signedInSession();
     given()
