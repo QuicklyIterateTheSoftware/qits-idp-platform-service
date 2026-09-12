@@ -100,7 +100,7 @@ Refusals are RFC 6749 §5.2: `invalid_client` (401, with a `WWW-Authenticate` ch
 
 ### Local Git workstations
 
-`qits login` uses a public OAuth client, `qits-git-workstation`, rather than receiving a service
+`qits-bootstrap login` uses a public OAuth client, `qits-git-workstation`, rather than receiving a service
 credential. It starts `GET /idp/authorize` in the browser with `response_type=code`, an S256 PKCE
 challenge, the fixed githost audience and an exact `http://127.0.0.1:<ephemeral-port>/…` callback.
 The browser must already hold a `qits-session`; approval returns a two-minute, one-use code to that
