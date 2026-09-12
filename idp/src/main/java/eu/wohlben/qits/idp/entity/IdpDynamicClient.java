@@ -67,6 +67,15 @@ public class IdpDynamicClient extends PanacheEntityBase {
   @Column(name = "claims", length = 1024)
   public String claims;
 
+  /**
+   * The Git refs this credential may push, one per line. {@link
+   * eu.wohlben.qits.idp.control.GitRefs} owns the form and the rules. Null: the commission stated no
+   * list, and its tokens carry no {@code git_refs} claim. The empty string: the empty list, "may
+   * push nothing". The owner may replace it; the next token carries the new list.
+   */
+  @Column(name = "git_refs", columnDefinition = "text")
+  public String gitRefs;
+
   @Column(name = "created_at", nullable = false)
   public Instant createdAt;
 }

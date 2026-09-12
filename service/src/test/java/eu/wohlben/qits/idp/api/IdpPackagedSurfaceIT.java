@@ -281,7 +281,9 @@ public class IdpPackagedSurfaceIT {
   @Test
   public void thePackagedProcessCommissionsMintsAndDecommissions() {
     String body =
-        "{\"contextKind\":\"packaged-it\",\"contextId\":\"ctx-" + System.nanoTime() + "\"}";
+        "{\"contextKind\":\"packaged-it\",\"contextId\":\"ctx-"
+            + System.nanoTime()
+            + "\",\"gitRefs\":[\"refs/heads/packaged/one\"]}";
     io.restassured.path.json.JsonPath commissioned =
         given()
             .contentType(ContentType.JSON)
@@ -316,7 +318,21 @@ public class IdpPackagedSurfaceIT {
         .get("/idp/api/clients")
         .then()
         .statusCode(200)
-        .body("find { it.clientId == '" + clientId + "' }.contextKind", equalTo("packaged-it"));
+        .body("find { it.clientId == '" + clientId + "' }.contextKind", equalTo("packaged-it"))
+        .body(
+            "find { it.clientId == '" + clientId + "' }.gitRefs",
+            equalTo(java.util.List.of("refs/heads/packaged/one")));
+
+    // The git-refs replace: a third record in, the view record out, and a row update.
+    given()
+        .contentType(ContentType.JSON)
+        .header("Authorization", basic("prod-qits-workspaces", SECRET))
+        .body("{\"gitRefs\":[]}")
+        .when()
+        .put("/idp/api/clients/" + clientId + "/git-refs")
+        .then()
+        .statusCode(200)
+        .body("gitRefs", equalTo(java.util.List.of()));
 
     given()
         .header("Authorization", basic("prod-qits-workspaces", SECRET))

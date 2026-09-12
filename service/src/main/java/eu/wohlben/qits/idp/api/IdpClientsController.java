@@ -11,6 +11,7 @@ import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
@@ -25,9 +26,10 @@ import org.jboss.resteasy.reactive.RestResponse;
  * The commission API: {@code /idp/api/clients}, where a service that provisions a dynamic context
  * gets a credential for it and gives it back when the context ends.
  *
- * <p>Three verbs and no more. {@code POST} commissions, {@code DELETE} decommissions, {@code GET}
- * lists what the caller commissioned so a crash cannot leak credentials nobody can see. The
- * lifetime model is in {@link DynamicClients}; this class is the boundary.
+ * <p>Four verbs and no more. {@code POST} commissions, {@code DELETE} decommissions, {@code GET}
+ * lists what the caller commissioned so a crash cannot leak credentials nobody can see, and {@code
+ * PUT …/git-refs} replaces the Git refs a commission may push. The lifetime model is in {@link
+ * DynamicClients}; this class is the boundary.
  *
  * <h2>Why HTTP Basic against the existing clients</h2>
  *
@@ -76,9 +78,21 @@ public class IdpClientsController {
    * existed and is read as "states nothing". One canonical constructor and no second one: Jackson
    * binds a record through the canonical constructor, and a convenience overload nobody calls would
    * be dead code standing where an ambiguity could grow.
+   *
+   * <p>{@code gitRefs} is optional too: the Git refs the credential may push, as {@code
+   * GitRefs} checks them. Absent or null states no scope, and the token carries no {@code git_refs}
+   * (today's behaviour). {@code []} states "push nothing".
    */
   public record CommissionRequest(
-      String contextKind, String contextId, Map<String, String> claims) {}
+      String contextKind,
+      String contextId,
+      Map<String, String> claims,
+      List<String> gitRefs) {}
+
+  /**
+   * The body of {@code PUT /{clientId}/git-refs}: the new list, whole. {@code []} is "push nothing".
+   */
+  public record GitRefsRequest(List<String> gitRefs) {}
 
   /**
    * The answer to a commission. <b>The secret is in this response and nowhere else</b> — the store
@@ -96,6 +110,7 @@ public class IdpClientsController {
       String contextKind,
       String contextId,
       Map<String, String> claims,
+      List<String> gitRefs,
       String createdAt) {}
 
   /** One live commission, as the owner's reconcile reads it. No secret, ever. */
@@ -105,6 +120,7 @@ public class IdpClientsController {
       String contextKind,
       String contextId,
       Map<String, String> claims,
+      List<String> gitRefs,
       String createdAt) {}
 
   @Inject BasicCaller caller;
@@ -142,7 +158,11 @@ public class IdpClientsController {
 
     Commissioned issued =
         dynamicClients.commission(
-            owner.clientId(), request.contextKind(), request.contextId(), request.claims());
+            owner.clientId(),
+            request.contextKind(),
+            request.contextId(),
+            request.claims(),
+            request.gitRefs());
     StoredClient client = issued.client();
     return RestResponse.ResponseBuilder.create(
             Response.Status.CREATED,
@@ -153,6 +173,7 @@ public class IdpClientsController {
                 client.contextKind(),
                 client.contextId(),
                 client.claims(),
+                client.gitRefs(),
                 client.createdAt().toString()))
         // The body holds a credential. Same rule as the token response, same reason.
         .header(HttpHeaders.CACHE_CONTROL, "no-store")
@@ -173,16 +194,46 @@ public class IdpClientsController {
     IdpClient owner =
         caller.requireRole(caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM);
     return dynamicClients.listOwnedBy(owner.clientId()).stream()
-        .map(
-            client ->
-                new CommissionView(
-                    client.clientId(),
-                    client.owner(),
-                    client.contextKind(),
-                    client.contextId(),
-                    client.claims(),
-                    client.createdAt().toString()))
+        .map(IdpClientsController::view)
         .toList();
+  }
+
+  /**
+   * Replace the Git refs of one commission (principal-bound-git-refs-plan.md, C2). This is the
+   * narrowing: when a sub-workspace takes over a branch, the epic's credential loses that ref here.
+   * The next token carries the new list.
+   *
+   * <p><b>Only the owner</b>, with the same Basic pair and role as {@code POST}; a commissioned
+   * caller is 403, as there. Another owner's client, an unknown id and a static id are all 404 —
+   * the decommission rule, so nobody maps other services' contexts from here.
+   *
+   * <p><b>The body must carry a list.</b> {@code []} removes every ref. There is no way back to "no
+   * scope stated": that would widen the credential to what its roles allow.
+   *
+   * <p>200 with the commission as the listing shows it. A plain return type, so the native image
+   * builder sees the record (see {@link #commission} for why that matters).
+   */
+  @PUT
+  @Path("/{clientId}/git-refs")
+  @Consumes(MediaType.APPLICATION_JSON)
+  public CommissionView replaceGitRefs(
+      @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
+      @PathParam("clientId") String clientId,
+      GitRefsRequest request) {
+    IdpClient owner =
+        caller.staticOnly(
+            authorization,
+            "a commissioned client may not change a commission",
+            BasicCaller.PLATFORM_SYSTEM);
+    if (request == null || request.gitRefs() == null) {
+      throw OAuthException.invalidRequest(
+          "a JSON body with a gitRefs list is required; send [] for a credential that may push"
+              + " nothing");
+    }
+    return dynamicClients
+        .replaceGitRefs(clientId, owner.clientId(), request.gitRefs())
+        .map(IdpClientsController::view)
+        .orElseThrow(() -> OAuthException.notFound("no such commissioned client"));
   }
 
   /**
@@ -201,11 +252,27 @@ public class IdpClientsController {
   public Response decommission(
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
       @PathParam("clientId") String clientId) {
-    IdpClient owner =
-        caller.requireRole(caller.authenticated(authorization), BasicCaller.PLATFORM_SYSTEM);
-    if (!dynamicClients.decommission(clientId, owner.clientId())) {
+    IdpClient authenticated = caller.authenticated(authorization);
+    // A credential may always hand itself back. Its roles may be its kind's own
+    // (qits.idp.commission.roles.<kind>, e.g. qits:agent) rather than its owner's, and giving back
+    // one's own credential needs no platform role.
+    if (!authenticated.clientId().equals(clientId)) {
+      caller.requireRole(authenticated, BasicCaller.PLATFORM_SYSTEM);
+    }
+    if (!dynamicClients.decommission(clientId, authenticated.clientId())) {
       throw OAuthException.notFound("no such commissioned client");
     }
     return Response.noContent().build();
+  }
+
+  private static CommissionView view(StoredClient client) {
+    return new CommissionView(
+        client.clientId(),
+        client.owner(),
+        client.contextKind(),
+        client.contextId(),
+        client.claims(),
+        client.gitRefs(),
+        client.createdAt().toString());
   }
 }

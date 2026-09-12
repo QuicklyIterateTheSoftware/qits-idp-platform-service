@@ -72,6 +72,6 @@ public class ClientRolesTest {
   }
 
   private static IdpClient client(String clientId, String... roles) {
-    return new IdpClient(clientId, null, List.of(), List.of(roles), Map.of());
+    return new IdpClient(clientId, null, List.of(), List.of(roles), Map.of(), null, null);
   }
 }

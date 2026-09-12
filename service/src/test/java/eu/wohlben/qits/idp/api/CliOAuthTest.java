@@ -95,8 +95,11 @@ public class CliOAuthTest {
     assertFalse(
         claims.getStringListClaimValue("groups").stream().anyMatch(g -> g.startsWith("clients/")),
         "only a client credential names a client");
-    // Nothing Git-shaped leaks across: this token is not the workstation's.
+    // The workstation's old claim stays off: this token is not the workstation's.
     assertEquals(null, claims.getClaimValueAsString("git_ref_pattern"));
+    // But a person pushes only external/*, whatever their roles (principal-bound-git-refs-plan.md,
+    // C1) — qits:admin above does not widen it.
+    assertEquals(List.of("refs/heads/external/*"), claims.getStringListClaimValue("git_refs"));
 
     Response refreshed = token(CLIENT, "refresh_token", null, null, null, firstRefresh);
     refreshed.then().statusCode(200).body("expires_in", equalTo(900));

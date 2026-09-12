@@ -61,7 +61,11 @@ public class IdpClients {
                 config.getOptionalValue(prefix + "secret", String.class).orElse(null)),
             config.getOptionalValues(prefix + "audiences", String.class).orElse(List.of()),
             roles,
-            claims(prefix)));
+            claims(prefix),
+            // A static client states no context and no Git refs, so its token carries neither
+            // claim: it stays unrestricted (principal-bound-git-refs-plan.md, C1).
+            null,
+            null));
   }
 
   private Map<String, String> claims(String prefix) {

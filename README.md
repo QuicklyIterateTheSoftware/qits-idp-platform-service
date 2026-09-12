@@ -28,6 +28,7 @@ Everything is served under `/idp`, the segment the gateway routes verbatim.
 | `POST /idp/api/clients` | commission a credential for one dynamic context. |
 | `GET /idp/api/clients` | the caller's own live commissions. |
 | `DELETE /idp/api/clients/{clientId}` | decommission one. |
+| `PUT /idp/api/clients/{clientId}/git-refs` | replace the Git refs one commission may push. Owner only. |
 | `POST /idp/api/auth/register-options` | WebAuthn creation options. Guarded by a register token or a session. |
 | `POST /idp/api/auth/register` | an attestation or a password → an account and a session. |
 | `POST /idp/api/auth/login-options` | WebAuthn request options. Anonymous. |
@@ -74,6 +75,8 @@ The token is RS256, carries a `kid`, and says:
 | `iat`, `exp`, `jti` | issued now, valid for `qits.idp.token-ttl-seconds` (3600 by default) |
 | `groups` | the client's configured roles, **plus `clients/<client id>`** — see below |
 | `project`, `workspace`, `branch` | only when granted to the client, copied verbatim |
+| `context_kind` | commissioned clients only: the commission's `contextKind` |
+| `git_refs` | commissioned clients only, and only when the commission stated a list — see [Git refs](#git-refs) |
 
 **Every client token names its own client.** `groups` — which `quarkus-oidc` reads as roles — always
 ends with `clients/<the id in `sub`>`, stamped at mint time and configured nowhere. A role naming one
@@ -110,8 +113,25 @@ family through `/api/workstations`.
 
 The access token is deliberately not the user's ordinary administrator identity: it has
 `groups=["qits:git:external"]`, `credential_type=workstation`,
-`git_ref_pattern=refs/heads/external/*`, and only the configured githost audience. The githost must
-enforce that ref pattern for every update; no workstation token has `qits:system`.
+`git_ref_pattern=refs/heads/external/*`, `git_refs=["refs/heads/external/*"]`, and only the
+configured githost audience. The githost must enforce that ref pattern for every update; no
+workstation token has `qits:system`.
+
+### Git refs
+
+What a token may push is stated by the idp in `git_refs` and enforced by the githost. The contract
+is C1/C2 of `principal-bound-git-refs-plan.md` in the qits superproject.
+
+`git_refs` is a JSON array. Each entry is an exact ref (`refs/heads/ticket/t-1`) or a prefix
+pattern ending in `/*` (`refs/heads/external/*`), and each starts with `refs/heads/`. An empty array
+means "may push nothing". No claim means "no scope stated".
+
+| token | `git_refs` | `context_kind` |
+|---|---|---|
+| workstation (`qits-git-workstation`) | `["refs/heads/external/*"]`, beside the older `git_ref_pattern` | — |
+| CLI (`qits-cli`) | `["refs/heads/external/*"]`, whatever the person's roles | — |
+| commissioned client | the commission's `gitRefs`, when it stated them | the commission's `contextKind` |
+| static service client | — | — |
 
 ## Clients
 
@@ -151,7 +171,7 @@ credential's lifetime *is* the context's: no lease, no TTL on the pair, nothing 
 The model, and which owner decommissions at which event, is `authenticated-reads-plan.md` in the
 qits superproject.
 
-Three verbs, all authenticated with **HTTP Basic carrying the caller's own client id and secret** —
+Four verbs, all authenticated with **HTTP Basic carrying the caller's own client id and secret** —
 the pair it already holds to get tokens with. No new audience, no bearer, no second credential to
 distribute, and the idp does not have to validate its own tokens to answer.
 
@@ -170,11 +190,24 @@ distribute, and the idp does not have to validate its own tokens to answer.
       http://qits-platform-idp:8080/idp/api/clients
     # 201, and every token it mints carries project=b03b84b1-…
 
+    # commission with GIT REFS — what the credential may push
+    curl -s -u prod-qits-workspaces:$SECRET -H 'Content-Type: application/json' \
+      -d '{"contextKind":"workspace","contextId":"1102",
+           "gitRefs":["refs/heads/epic/e-1","refs/heads/feature/e-1-a"]}' \
+      http://qits-platform-idp:8080/idp/api/clients
+    # 201, "gitRefs":[…] echoed, and every token carries git_refs=[…] and context_kind=workspace
+
+    # replace the list — the owner only; the next token carries it
+    curl -s -X PUT -u prod-qits-workspaces:$SECRET -H 'Content-Type: application/json' \
+      -d '{"gitRefs":["refs/heads/epic/e-1"]}' \
+      http://qits-platform-idp:8080/idp/api/clients/dyn-workspace-1102-…/git-refs
+    # 200, the commission as the listing shows it
+
     # what this caller has out — for reconciling orphans after a crash
     curl -s -u prod-qits-ci:$SECRET http://qits-platform-idp:8080/idp/api/clients
     # 200
     # [{"clientId":"dyn-ci-run-4711-8Xq…","owner":"prod-qits-ci",
-    #   "contextKind":"ci-run","contextId":"4711","claims":{},"createdAt":"…"}]
+    #   "contextKind":"ci-run","contextId":"4711","claims":{},"gitRefs":null,"createdAt":"…"}]
 
     # decommission — 204
     curl -s -X DELETE -u prod-qits-ci:$SECRET \
@@ -187,6 +220,19 @@ The rules around them:
   second code path.
 - **It is issued its owner's audiences and roles**, read from the owner's config when a token is
   minted. So narrowing an owner's audiences narrows every credential it commissioned, at once.
+- **Unless its kind has roles of its own:** `qits.idp.commission.roles.<contextKind>=<role>,<role>`
+  replaces the owner's roles for every credential of that kind (audiences stay the owner's). No
+  line means the owner's roles. Nothing sets one yet; phase 4 of the plan sets the agent kinds to
+  `qits:agent`. A `clients/…` role there makes those credentials unusable (400). A credential may
+  always hand itself back (`DELETE` of its own id), whatever roles its kind gives it.
+- **Its Git refs are its own.** The optional `gitRefs` member states what the credential may push;
+  every token then carries it as `git_refs`. Not stated means no claim, as before. The rules, each a
+  400 with nothing written: every entry starts with `refs/heads/`; `*` only as a trailing `/*`; at
+  most 500 entries; each at most 255 characters; no repeats; no control characters. `PUT
+  …/{clientId}/git-refs` with `{"gitRefs":[…]}` replaces the list: the owner only (a commissioned
+  caller is 403; another owner's client or an unknown id is 404). It must state a list — `[]` for
+  "push nothing" — because going back to "no list" would widen the credential. See
+  `control/GitRefs`.
 - **Its claims are its own, and a commission narrows.** The optional `claims` member states what
   this context is *about* — `{"project":"<projectId>"}` for a workspace — and those land on the row
   and go into every token it mints, over the owner's grants for the same names and beside the ones
@@ -368,9 +414,11 @@ to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 
 ## What is not here yet
 
-**Per-context permission scoping.** A commissioned credential gets its owner's whole access today.
-The follow-up narrows it per context — ci may publish, a refinement container may not — on the rows
-the commission API already writes, and is the same day the token lifetime is worth shrinking again.
+**Per-context permission scoping.** A commissioned credential gets its owner's roles today, narrowed
+only by the claims and Git refs its commission states. Roles per context kind exist
+(`qits.idp.commission.roles.<kind>`) but nothing sets one yet. The follow-up narrows the rest per
+context — ci may publish, a refinement container may not — and is the same day the token lifetime
+is worth shrinking again.
 
 **Authorization.** Roles are stored, reported by introspection and delivered to every service, and
 **nothing enforces one yet**. Which route demands which role is a later plan, together with

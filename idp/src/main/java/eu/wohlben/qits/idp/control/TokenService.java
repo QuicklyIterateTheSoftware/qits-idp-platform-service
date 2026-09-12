@@ -105,6 +105,15 @@ public class TokenService {
             .expiresAt(now.plusSeconds(tokenTtlSeconds));
     // The granted claims, verbatim. The idp does not interpret these values.
     client.claims().forEach(token::claim);
+    // A commissioned client's kind and Git refs (principal-bound-git-refs-plan.md, C1). This is not
+    // a branch on the kind of client: the fields are null for a static client, so it gets neither,
+    // and a commission that stated no list gets no git_refs.
+    if (client.contextKind() != null) {
+      token.claim(ClaimNames.CONTEXT_KIND, client.contextKind());
+    }
+    if (client.gitRefs() != null) {
+      token.claim(ClaimNames.GIT_REFS, client.gitRefs());
+    }
 
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
     return new IssuedToken(jwt, tokenTtlSeconds, audiences);
@@ -132,7 +141,10 @@ public class TokenService {
             .audience(Set.of(workstationGithostAudience))
             .groups(Set.of("qits:git:external"))
             .claim("credential_type", "workstation")
+            // Both spellings of the same rule: git_ref_pattern for githosts that read only it,
+            // git_refs for the ones that read the list (principal-bound-git-refs-plan.md, C1).
             .claim("git_ref_pattern", "refs/heads/external/*")
+            .claim(ClaimNames.GIT_REFS, GitRefs.PERSON)
             .issuedAt(now)
             .expiresAt(now.plusSeconds(workstationAccessTokenTtlSeconds));
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
@@ -156,6 +168,9 @@ public class TokenService {
    * was written to.
    *
    * <p>The audiences are {@code qits.idp.cli.audiences}, which the public client cannot influence.
+   *
+   * <p><b>Its Git rights are not its roles.</b> It carries {@code git_refs=["refs/heads/external/*"]}:
+   * a person pushes only there, and {@code qits:admin} does not widen it.
    */
   public IssuedToken cli(UUID userId) {
     Users.Account account =
@@ -184,6 +199,8 @@ public class TokenService {
             .audience(new LinkedHashSet<>(cliAudiences))
             .groups(groups)
             .claim("credential_type", "cli")
+            // A person pushes only external/*, whatever their roles (user ruling 2026-09-12).
+            .claim(ClaimNames.GIT_REFS, GitRefs.PERSON)
             .issuedAt(now)
             .expiresAt(now.plusSeconds(cliAccessTokenTtlSeconds));
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());

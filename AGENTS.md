@@ -116,6 +116,8 @@ the Basic-authenticated machine APIs, and a commissioned credential inheriting i
 A new place that accepts roles from anywhere else has to call `refuseReserved` itself, and a new
 mint that is not to a client credential must not stamp one — `TokenService.workstation` is the
 standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is what all of it is for.
+The roles per commission kind (`qits.idp.commission.roles.<kind>`, `CommissionRoles`) are such a
+place: `ClientRegistry.rolesFor` calls `refuseReserved` on them.
 
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
@@ -155,7 +157,9 @@ login page. A new route picks the one that matches who calls it, not the one nea
 an `IdpClient` either way; a commissioned credential mints identically to a service client because
 there is no branch to make it differ. That identity is the whole commission model working — docker's
 Bearer dance and `quarkus-oidc-client` need no second code path — so a change that makes the token
-endpoint check the kind of client it has is a change worth arguing about first.
+endpoint check the kind of client it has is a change worth arguing about first. `context_kind` and
+`git_refs` keep that rule: they are two nullable fields on `IdpClient`, stamped when present. A
+static client has neither, so its token carries neither.
 
 The directories are `idp/` and `service/`; the artifactIds are `qits-idp-domain` and
 `qits-idp-service` — generic coordinates would collide in a shared `~/.m2`.
@@ -282,6 +286,11 @@ Two things about the shipped V1:
   turned out to hold rows. That is deliberate: nothing had ever written this table, and if that were
   somehow wrong it is worth stopping for.
 
+  **V7 adds `git_refs`**, with its reader (`ClientRegistry`, `TokenService`) and its rule (`GitRefs`)
+  in the same change — contract C2 of `principal-bound-git-refs-plan.md`. One ref per line, `text`.
+  **Null and the empty string differ:** null is "no list stated" (no `git_refs` claim, every older
+  row), the empty string is the empty list ("push nothing"). Keep that difference in any reader.
+
 ## Adding a dependency on another context
 
 Don't. This context has no compile-time dependency on any other qits module and must not grow one —
@@ -314,6 +323,13 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   inheritance it always was. `CommissionedClaimsTest` is the same rule as plain unit tests, including
   what a hand-edited column must do — drop what it cannot read, never throw, because that parse runs
   on the token path for every commissioned credential.
+- `CommissionedGitRefsTest` is contracts C1 and C2 of `principal-bound-git-refs-plan.md`: which
+  token carries `git_refs` and `context_kind` (static client: neither), a commission with and
+  without `gitRefs`, the empty list reaching the token as `[]`, each validation rule as a 400 with no
+  row, the owner-only `PUT …/git-refs` (foreign or unknown is 404, the credential itself 403) and the
+  next token after it, roles per kind (`agent-test` and `reserved-test` in the suite's config), and
+  V7's column. `GitRefsTest` is the same rules as plain unit tests. The person tokens' `git_refs`
+  are pinned in `CliOAuthTest` and `WorkstationOAuthTest`.
 - `UserAuthenticationTest` is the user surface end to end, and its cases are the invariants: a
   register token makes exactly one account, the two bootstrap roles are granted as rows, the cookie
   carries exactly the attributes the plan fixed, a session introspects until it is revoked and not

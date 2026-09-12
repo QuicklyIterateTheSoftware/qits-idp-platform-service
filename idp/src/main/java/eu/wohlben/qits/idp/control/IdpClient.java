@@ -19,13 +19,19 @@ import java.util.Map;
  * @param audiences the {@code aud} values this client may request; a request naming none gets all
  *     of them
  * @param claims granted claims, copied into the token verbatim
+ * @param contextKind the commission's context kind, stamped as {@code context_kind}; null for a
+ *     static client, which carries no such claim
+ * @param gitRefs the Git refs this client may push, stamped as {@code git_refs}; null when no list
+ *     was stated (every static client), which carries no such claim. Empty means "push nothing".
  */
 public record IdpClient(
     String clientId,
     ClientSecret secret,
     List<String> audiences,
     List<String> roles,
-    Map<String, String> claims) {
+    Map<String, String> claims,
+    String contextKind,
+    List<String> gitRefs) {
 
   /**
    * Whether this client can authenticate at all.

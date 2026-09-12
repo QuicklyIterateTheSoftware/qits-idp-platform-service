@@ -27,5 +27,14 @@ public final class ClaimNames {
   /** Every grantable claim, in the order they are read from config. */
   public static final List<String> GRANTABLE = List.of(PROJECT, WORKSPACE, BRANCH);
 
+  /**
+   * The Git refs a token may push, a JSON array — see {@link GitRefs}. NOT grantable: the idp sets
+   * it on person tokens and from a commission's own list, never from config or a claims map.
+   */
+  public static final String GIT_REFS = "git_refs";
+
+  /** The commission's {@code contextKind}, on every token of a commissioned client. Not grantable. */
+  public static final String CONTEXT_KIND = "context_kind";
+
   private ClaimNames() {}
 }

@@ -27,6 +27,12 @@ import org.jboss.logging.Logger;
  * Two consequences worth knowing: narrowing an owner's audiences narrows every credential it
  * commissioned, at once; and an owner removed from {@code qits.idp.clients} leaves its commissioned
  * clients able to authenticate and entitled to nothing, which is refused as {@code invalid_target}.
+ * <b>One exception for roles:</b> a context kind may have roles of its own ({@link
+ * CommissionRoles}); with no such line the owner's roles apply, as before.
+ *
+ * <p><b>The commission's context kind and Git refs ride along</b> on the {@link IdpClient}, and
+ * {@link TokenService} stamps them as {@code context_kind} and {@code git_refs}. A static client has
+ * neither, so its token carries neither.
  *
  * <p><b>Claims are the one thing a commission may say for itself</b>, and that is the per-context
  * scoping the plan declared. {@link #asClient} merges in one direction only — the owner's grants
@@ -43,6 +49,8 @@ public class ClientRegistry {
   @Inject IdpClients staticClients;
 
   @Inject DynamicClients dynamicClients;
+
+  @Inject CommissionRoles commissionRoles;
 
   /** The client with this id, static or commissioned, or empty when there is none. */
   public Optional<IdpClient> find(String clientId) {
@@ -93,8 +101,25 @@ public class ClientRegistry {
         stored.clientId(),
         ClientSecret.stored(stored.secretHash()),
         owner == null ? List.of() : owner.audiences(),
-        owner == null ? List.of() : owner.roles(),
-        claimsFor(owner, stored));
+        rolesFor(owner, stored),
+        claimsFor(owner, stored),
+        stored.contextKind(),
+        stored.gitRefs());
+  }
+
+  /**
+   * The roles configured for this commission's kind ({@link CommissionRoles}), else the owner's.
+   *
+   * <p>A configured list is refused when it holds a {@code clients/…} role, exactly like a static
+   * client's: the credential then mints nothing until the line is fixed, the safe direction.
+   */
+  private List<String> rolesFor(IdpClient owner, StoredClient stored) {
+    Optional<List<String>> configured = commissionRoles.forKind(stored.contextKind());
+    if (configured.isPresent()) {
+      ClientRoles.refuseReserved(stored.clientId(), configured.get());
+      return configured.get();
+    }
+    return owner == null ? List.of() : owner.roles();
   }
 
   /**

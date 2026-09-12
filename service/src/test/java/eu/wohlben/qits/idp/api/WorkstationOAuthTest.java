@@ -59,7 +59,9 @@ public class WorkstationOAuthTest {
         claims.getStringListClaimValue("groups").stream().anyMatch(g -> g.startsWith("clients/")),
         "only a client credential names a client");
     assertEquals("workstation", claims.getClaimValueAsString("credential_type"));
+    // Both spellings: the old claim for githosts that read only it, and the list (C1).
     assertEquals("refs/heads/external/*", claims.getClaimValueAsString("git_ref_pattern"));
+    assertEquals(List.of("refs/heads/external/*"), claims.getStringListClaimValue("git_refs"));
 
     Response refreshed = token("refresh_token", null, null, firstRefresh);
     refreshed.then().statusCode(200).body("expires_in", equalTo(900));

@@ -60,8 +60,16 @@ public class DynamicClients {
    */
   public static final String ID_PREFIX = "dyn-";
 
-  /** A context kind is a lowercase slug: it goes into a client id, which goes into logs. */
+  /**
+   * A context kind is a lowercase slug: it goes into a client id, which goes into logs, and into a
+   * config key ({@link CommissionRoles}).
+   */
   private static final Pattern CONTEXT_KIND = Pattern.compile("[a-z][a-z0-9-]{0,31}");
+
+  /** Whether this is a context kind this service writes: a lowercase slug of at most 32. */
+  static boolean isContextKind(String kind) {
+    return kind != null && CONTEXT_KIND.matcher(kind).matches();
+  }
 
   /** How much of the context id is echoed into the client id, before the random tail. */
   private static final int ID_SLUG_LENGTH = 24;
@@ -73,6 +81,8 @@ public class DynamicClients {
    * A row as everything outside persistence sees it — a record, so nothing caches a live entity.
    *
    * @param claims the claims this commission stated, already parsed. Empty is the ordinary case.
+   * @param gitRefs the Git refs this credential may push ({@link GitRefs}); null when the
+   *     commission stated no list, empty for "push nothing"
    */
   public record StoredClient(
       String clientId,
@@ -81,6 +91,7 @@ public class DynamicClients {
       String contextKind,
       String contextId,
       Map<String, String> claims,
+      List<String> gitRefs,
       Instant createdAt) {}
 
   /** A fresh commission, with the plaintext secret that exists only in this answer. */
@@ -96,11 +107,18 @@ public class DynamicClients {
    * @param owner the client id of the caller, already authenticated
    * @param claims what this commission says its context is about, or null/empty for none — see
    *     {@link CommissionedClaims}, which is what decides whether a stated claim is acceptable
+   * @param gitRefs the Git refs the credential may push, or null for "no scope stated" — see
+   *     {@link GitRefs}
    * @throws OAuthException {@code invalid_request} (400) when the context kind or id is not one
-   *     this service will put in a client id and a row, or a stated claim is not one it will grant
+   *     this service will put in a client id and a row, a stated claim is not one it will grant, or
+   *     the Git refs break a rule
    */
   public Commissioned commission(
-      String owner, String contextKind, String contextId, Map<String, String> claims) {
+      String owner,
+      String contextKind,
+      String contextId,
+      Map<String, String> claims,
+      List<String> gitRefs) {
     String kind = contextKind == null ? "" : contextKind.trim();
     String context = contextId == null ? "" : contextId.trim();
     if (!CONTEXT_KIND.matcher(kind).matches()) {
@@ -114,6 +132,7 @@ public class DynamicClients {
     // Validated BEFORE anything is generated or written: a refused claim must cost the caller a 400
     // and leave no row and no secret behind.
     Map<String, String> stated = CommissionedClaims.stated(claims);
+    List<String> refs = GitRefs.stated(gitRefs);
 
     String secret = randomToken(32);
     IdpDynamicClient row = new IdpDynamicClient();
@@ -123,6 +142,7 @@ public class DynamicClients {
     row.contextKind = kind;
     row.contextId = context;
     row.claims = CommissionedClaims.format(stated);
+    row.gitRefs = GitRefs.format(refs);
     row.createdAt = Instant.now();
 
     // A bare insert, so DbRetry.inNewTx rather than DbRetry.call: it owns the transaction boundary
@@ -137,13 +157,62 @@ public class DynamicClients {
     // carries a slug of it, which is enough to find the context and is bounded by construction.
     // The claim NAMES, never their values: a value is the caller's string about its own context,
     // exactly like the context id above, and the same rule applies to it.
+    // The same rule for the Git refs: how many, never which.
     LOG.infof(
-        "commissioned client %s for owner %s, context kind %s, scoped by %s",
+        "commissioned client %s for owner %s, context kind %s, scoped by %s, git refs %s",
         LoggableClientId.of(stored.clientId()),
         LoggableClientId.of(owner),
         kind,
-        stated.isEmpty() ? "nothing" : stated.keySet());
+        stated.isEmpty() ? "nothing" : stated.keySet(),
+        refs == null ? "not stated" : refs.size() + " entries");
     return new Commissioned(stored, secret);
+  }
+
+  /**
+   * Replace the Git refs of one commission. Only its owner may; the credential itself may not.
+   *
+   * <p>The next token carries the new list. The cache entry is evicted on both sides of the write,
+   * for the reason {@link #decommission} gives.
+   *
+   * @return the updated client, or empty when there is no such row or {@code caller} does not own
+   *     it — one answer for both, as for decommission
+   * @throws OAuthException {@code invalid_request} (400) when the list is missing or breaks a rule.
+   *     Checked before the row is read, so this answer says nothing about whether the client exists.
+   */
+  public Optional<StoredClient> replaceGitRefs(
+      String clientId, String caller, List<String> gitRefs) {
+    if (gitRefs == null) {
+      // "No list" would widen the credential back to its roles, so a replace always states one.
+      throw OAuthException.invalidRequest(
+          "gitRefs is required; send [] for a credential that may push nothing");
+    }
+    List<String> refs = GitRefs.stated(gitRefs);
+    if (clientId == null || !clientId.startsWith(ID_PREFIX)) {
+      return Optional.empty();
+    }
+    cache.remove(clientId);
+    StoredClient updated =
+        DbRetry.inNewTx(
+            "replace the git refs of an idp client",
+            () -> {
+              IdpDynamicClient row = repository.findById(clientId);
+              if (row == null || !row.owner.equals(caller)) {
+                return null;
+              }
+              row.gitRefs = GitRefs.format(refs);
+              return toStored(row);
+            });
+    cache.remove(clientId);
+    if (updated == null) {
+      LOG.warnf(
+          "git refs change refused: %s does not own %s, or it does not exist",
+          LoggableClientId.of(caller), LoggableClientId.of(clientId));
+      return Optional.empty();
+    }
+    LOG.infof(
+        "replaced the git refs of client %s, by %s: %d entries",
+        LoggableClientId.of(clientId), LoggableClientId.of(caller), refs.size());
+    return Optional.of(updated);
   }
 
   /** The stored client with this id — from the cache, else from the store. Misses are not cached. */
@@ -224,6 +293,7 @@ public class DynamicClients {
         row.contextKind,
         row.contextId,
         CommissionedClaims.parse(row.claims),
+        GitRefs.parse(row.gitRefs),
         row.createdAt);
   }
 
