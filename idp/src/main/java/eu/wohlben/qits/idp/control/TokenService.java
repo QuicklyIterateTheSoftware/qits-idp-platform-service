@@ -24,8 +24,8 @@ import org.jboss.logging.Logger;
  *
  * <p><b>Every client token names its own client.</b> The {@code groups} claim carries the
  * configured roles plus {@code clients/<client-id>}, stamped from the id that just authenticated
- * ({@link ClientRoles}). A user credential gets none — {@link #workstation} is the other mint here
- * and it issues one fixed, deliberately narrow role.
+ * ({@link ClientRoles}). A user credential gets none — {@link #workstation} and {@link #cli} are
+ * the other two mints here, and neither stamps a client identity onto a person.
  *
  * <p><b>A commissioned client mints exactly like a service client.</b> This class asks {@link
  * ClientRegistry} for a client and never learns which half answered — that identity is the whole
@@ -53,9 +53,26 @@ public class TokenService {
   @ConfigProperty(name = "qits.idp.workstation.githost-audience")
   String workstationGithostAudience;
 
+  /** A CLI access token is as short-lived as a workstation's, and configured on its own key. */
+  @ConfigProperty(name = "qits.idp.cli.access-token-ttl-seconds")
+  long cliAccessTokenTtlSeconds;
+
+  /**
+   * The resources a signed-in CLI may target — CONFIGURED, never derived from the request.
+   *
+   * <p>The list is what the deployed edge demands on the vhosts the tool actually calls, and it is
+   * env-prefixed like every other audience key here.  A CLI naming its own audience would be a
+   * public client choosing its own blast radius, so {@code /authorize} refuses an {@code audience}
+   * parameter for this client outright and this value is the whole answer.
+   */
+  @ConfigProperty(name = "qits.idp.cli.audiences")
+  List<String> cliAudiences;
+
   @Inject SigningKeys signingKeys;
 
   @Inject ClientRegistry clients;
+
+  @Inject Users users;
 
   /**
    * Authenticate and mint.
@@ -119,6 +136,57 @@ public class TokenService {
             .expiresAt(now.plusSeconds(workstationAccessTokenTtlSeconds));
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
     return new IssuedToken(jwt, workstationAccessTokenTtlSeconds, List.of(workstationGithostAudience));
+  }
+
+  /**
+   * Mint the credential a person's command-line tool holds after signing in through the browser.
+   *
+   * <p><b>It carries the person's own roles</b>, and that is the decision the epic records rather
+   * than an oversight: a CLI that could do less than the browser the same person just signed in
+   * with would be a tool that cannot do the job it exists for.  The token is therefore as strong as
+   * that session, and the defences are elsewhere — fifteen minutes of access-token life, refresh
+   * rotation with replay detection revoking the whole family, and a revoke button per device.
+   * Tokens narrowed to a project or a service are named later work.
+   *
+   * <p><b>It carries no {@code clients/…} self-role</b>, for the same reason {@link #workstation}
+   * does not: that stamp means "this bearer IS that machine client", and a person is not one.  A
+   * role a user somehow holds under that prefix is dropped here rather than trusted, so the machine
+   * identity a resource service gates on stays unreachable through a login however the user store
+   * was written to.
+   *
+   * <p>The audiences are {@code qits.idp.cli.audiences}, which the public client cannot influence.
+   */
+  public IssuedToken cli(UUID userId) {
+    Users.Account account =
+        users
+            .byId(userId)
+            .orElseThrow(
+                () ->
+                    OAuthException.invalidGrant(
+                        "the account this credential was approved for no longer exists"));
+    if (cliAudiences.isEmpty()) {
+      LOG.warn("a cli token was refused: qits.idp.cli.audiences is empty");
+      throw OAuthException.invalidTarget("this installation configures no cli audience");
+    }
+    Set<String> groups = new LinkedHashSet<>();
+    for (String role : account.roles()) {
+      if (!role.startsWith(ClientRoles.SELF_PREFIX)) {
+        groups.add(role);
+      }
+    }
+    Instant now = Instant.now();
+    SigningKey key = signingKeys.signing();
+    JwtClaimsBuilder token =
+        Jwt.claims()
+            .issuer(issuer.url())
+            .subject(userId.toString())
+            .audience(new LinkedHashSet<>(cliAudiences))
+            .groups(groups)
+            .claim("credential_type", "cli")
+            .issuedAt(now)
+            .expiresAt(now.plusSeconds(cliAccessTokenTtlSeconds));
+    String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
+    return new IssuedToken(jwt, cliAccessTokenTtlSeconds, List.copyOf(cliAudiences));
   }
 
   /**

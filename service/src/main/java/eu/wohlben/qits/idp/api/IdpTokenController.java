@@ -1,5 +1,7 @@
 package eu.wohlben.qits.idp.api;
 
+import eu.wohlben.qits.idp.control.PublicClients;
+import eu.wohlben.qits.idp.control.PublicClients.PublicClient;
 import eu.wohlben.qits.idp.control.TokenService;
 import eu.wohlben.qits.idp.control.TokenService.IssuedToken;
 import eu.wohlben.qits.idp.control.WorkstationCredentials;
@@ -42,8 +44,7 @@ public class IdpTokenController {
 
   @Inject WorkstationCredentials workstations;
 
-  @org.eclipse.microprofile.config.inject.ConfigProperty(name = "qits.idp.workstation.client-id")
-  String workstationClientId;
+  @Inject PublicClients publicClients;
 
   /**
    * Client authentication is {@code client_secret_basic} or {@code client_secret_post}, never both
@@ -71,15 +72,15 @@ public class IdpTokenController {
       throw OAuthException.invalidRequest("grant_type is required");
     }
     if (GRANT_AUTHORIZATION_CODE.equals(grantType)) {
-      publicClient(clientIdParam, clientSecretParam, authorization);
+      PublicClient client = publicClient(clientIdParam, clientSecretParam, authorization);
       WorkstationCredentials.RefreshGrant grant =
-          workstations.exchangeCode(code, redirectUri, codeVerifier);
-      return tokenResponse(tokenService.workstation(grant.userId()), grant.refreshToken());
+          workstations.exchangeCode(client, code, redirectUri, codeVerifier);
+      return tokenResponse(mint(client, grant), grant);
     }
     if (GRANT_REFRESH_TOKEN.equals(grantType)) {
-      publicClient(clientIdParam, clientSecretParam, authorization);
-      WorkstationCredentials.RefreshGrant grant = workstations.refresh(refreshToken);
-      return tokenResponse(tokenService.workstation(grant.userId()), grant.refreshToken());
+      PublicClient client = publicClient(clientIdParam, clientSecretParam, authorization);
+      WorkstationCredentials.RefreshGrant grant = workstations.refresh(client, refreshToken);
+      return tokenResponse(mint(client, grant), grant);
     }
     if (!GRANT_CLIENT_CREDENTIALS.equals(grantType)) {
       throw OAuthException.unsupportedGrantType(
@@ -92,15 +93,36 @@ public class IdpTokenController {
             credentials.clientId(), credentials.secret(), audiences(audienceParams)), null);
   }
 
-  /** RFC 6749 §5.1 response, with a refresh token only for the workstation grants. */
-  private static Response tokenResponse(IssuedToken issued, String refreshToken) {
+  /**
+   * Which mint a spent grant reaches — the whole of what the two public clients differ by here.
+   *
+   * <p>It is the CLIENT that decides, not the grant: {@link WorkstationCredentials} has already
+   * refused a code or a refresh token whose row names the other one, so by this line the two facts
+   * agree and reading either would give the same answer.
+   */
+  private IssuedToken mint(PublicClient client, WorkstationCredentials.RefreshGrant grant) {
+    return client.cli() ? tokenService.cli(grant.userId()) : tokenService.workstation(grant.userId());
+  }
+
+  /**
+   * RFC 6749 §5.1 response, with a refresh token only for the public-client grants.
+   *
+   * <p><b>{@code refresh_expires_in} rides beside every {@code refresh_token}</b> and is not in RFC
+   * 6749 — the spec gives a client no way to learn when its refresh credential dies, so a tool can
+   * only discover the end of a session by being refused mid-command. One extra member lets {@code
+   * qits login} say "this sign-in ends on Friday" instead. It is the same additive shape several
+   * providers settled on, and a client that ignores it is unaffected.
+   */
+  private static Response tokenResponse(
+      IssuedToken issued, WorkstationCredentials.RefreshGrant grant) {
     // LinkedHashMap so the response reads in the order RFC 6749 §5.1 lists the members.
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("access_token", issued.accessToken());
     body.put("token_type", "Bearer");
     body.put("expires_in", issued.expiresInSeconds());
-    if (refreshToken != null) {
-      body.put("refresh_token", refreshToken);
+    if (grant != null) {
+      body.put("refresh_token", grant.refreshToken());
+      body.put("refresh_expires_in", grant.refreshExpiresInSeconds());
     }
     return Response.ok(body)
         // RFC 6749 §5.1: a token response is never cached, anywhere.
@@ -109,14 +131,24 @@ public class IdpTokenController {
         .build();
   }
 
-  /** The public workstation client authenticates by PKCE, never by an empty or shared secret. */
-  private void publicClient(String clientId, String secret, String authorization) {
+  /**
+   * A public client authenticates by PKCE, never by an empty or shared secret.
+   *
+   * <p>Both of them: a request carrying an {@code Authorization} header or a {@code client_secret}
+   * is refused whichever id it names, because a public client that could also present a secret
+   * would be two authentication models on one grant and the weaker one would be the one that
+   * decided.
+   */
+  private PublicClient publicClient(String clientId, String secret, String authorization) {
     if (authorization != null && !authorization.isBlank()) {
-      throw OAuthException.invalidRequest("the workstation public client must not use Authorization");
+      throw OAuthException.invalidRequest("a public client must not use Authorization");
     }
-    if (clientId == null || !workstationClientId.equals(clientId) || (secret != null && !secret.isBlank())) {
-      throw OAuthException.invalidClient("the workstation public client is required");
+    if (secret != null && !secret.isBlank()) {
+      throw OAuthException.invalidClient("a public client is required");
     }
+    return publicClients
+        .byId(clientId)
+        .orElseThrow(() -> OAuthException.invalidClient("a public client is required"));
   }
 
   /**

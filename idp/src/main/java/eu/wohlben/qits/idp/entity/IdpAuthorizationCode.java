@@ -26,6 +26,14 @@ public class IdpAuthorizationCode extends PanacheEntityBase {
   @Column(name = "code_hash", nullable = false, length = 255, unique = true)
   public String codeHash;
 
+  /**
+   * The public client this code was approved for.  Checked at exchange, so a code the Git
+   * workstation obtained cannot be spent by {@code qits-cli} — the two mints differ by everything
+   * that matters, and the row is what remembers which one was asked for.
+   */
+  @Column(name = "client_id", nullable = false, length = 255)
+  public String clientId;
+
   @Column(name = "user_id", nullable = false)
   public UUID userId;
 

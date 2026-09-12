@@ -1,5 +1,8 @@
 package eu.wohlben.qits.idp.api;
 
+import eu.wohlben.qits.idp.control.Issuer;
+import eu.wohlben.qits.idp.control.PublicClients;
+import eu.wohlben.qits.idp.control.PublicClients.PublicClient;
 import eu.wohlben.qits.idp.control.Sessions;
 import eu.wohlben.qits.idp.control.WorkstationCredentials;
 import eu.wohlben.qits.idp.error.AuthException;
@@ -11,20 +14,38 @@ import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
+import jakarta.ws.rs.core.UriInfo;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.LinkedHashSet;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
- * The browser leg of the Git workstation OAuth flow and the signed-in user's revocation surface.
+ * The browser leg of the public-client OAuth flows, and the signed-in user's revocation surface.
  *
- * <p>{@code /authorize} is public in the OAuth sense — a local process can initiate it — but it
- * never approves a credential without a live {@code qits-session}. The API below it is not an OAuth
- * protocol endpoint and requires that same session for every request.
+ * <p>Two public clients arrive here. The Git workstation names a loopback listener and catches its
+ * own redirect. {@code qits-cli} has no listener at the moment the person finishes signing in, so
+ * it names this idp's OWN page — {@code <origin>/idp/connect/cli} — which shows the code for the
+ * person to paste into the waiting command. Both spend the code at {@code /token} with the PKCE
+ * verifier the waiting process holds, which is what makes a pasted code worth nothing on its own.
+ *
+ * <p><b>{@code /authorize} with no session bounces to the sign-in page</b> rather than answering
+ * 401. A person who followed a URL their terminal printed has not signed in yet — that is the
+ * normal case, not an error — and 401 leaves them with nothing to do. The bounce carries the whole
+ * authorize URL as the login page's return location, so signing in lands back here and the code is
+ * issued on the second pass. The return location is validated by {@link BrowserSso} exactly like
+ * every other one: the authority is this idp's own canonical one, which its allow-list is checked
+ * to contain at startup.
+ *
+ * <p>The API below {@code /api} is not an OAuth protocol endpoint and requires a live session for
+ * every request.
  */
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
@@ -33,23 +54,42 @@ public class IdpWorkstationController {
   private static final String RESPONSE_TYPE_CODE = "code";
   private static final String S256 = "S256";
 
+  /** The SPA route that shows a pasted-code, relative to the idp's own path prefix. */
+  private static final String CLI_PAGE_PATH = "/connect/cli";
+
+  /** The SPA route that signs a person in, relative to the idp's own path prefix. */
+  private static final String LOGIN_PAGE_PATH = "/login";
+
   @Inject Sessions sessions;
 
   @Inject WorkstationCredentials workstations;
 
-  @ConfigProperty(name = "qits.idp.workstation.client-id")
-  String clientId;
+  @Inject PublicClients publicClients;
+
+  @Inject BrowserSso browserSso;
+
+  @Inject Issuer issuer;
 
   @ConfigProperty(name = "qits.idp.workstation.githost-audience")
   String githostAudience;
 
   /**
-   * Approve a PKCE code for a local loopback listener and send it directly back to that listener.
-   * The redirect URI is stored verbatim and must match byte-for-byte at token exchange.
+   * Approve a PKCE code and send it to the client's redirect target.
+   *
+   * <p>The order of the checks is the contract. The client and the redirect URI are settled first,
+   * because everything after them is only answerable once it is known WHERE an answer may be sent:
+   * an unknown {@code client_id} or a redirect target this idp does not recognise is refused with a
+   * 400 here and never redirected anywhere. Only then does the session decide between the bounce
+   * and the code, and only then — and only for the CLI page, whose reader is a person rather than a
+   * loopback listener — does a later protocol refusal travel to that page as {@code ?error=…}, the
+   * way RFC 6749 §4.1.2.1 says it should. The workstation client keeps the flat 400 it had: its
+   * redirect target is a local listener whose behaviour on an error response nobody has designed,
+   * and widening that was not asked for.
    */
   @GET
   @Path("/authorize")
   public Response authorize(
+      @Context UriInfo uriInfo,
       @CookieParam(SessionCookie.NAME) String sessionToken,
       @QueryParam("response_type") String responseType,
       @QueryParam("client_id") String requestedClientId,
@@ -58,45 +98,112 @@ public class IdpWorkstationController {
       @QueryParam("code_challenge_method") String challengeMethod,
       @QueryParam("audience") String audience,
       @QueryParam("state") String state) {
-    Sessions.Live session =
-        sessions
-            .resolve(sessionToken)
-            .orElseThrow(() -> AuthException.invalidCredentials("a signed-in session is required"));
-    if (!RESPONSE_TYPE_CODE.equals(responseType)
-        || !clientId.equals(requestedClientId)
-        || !S256.equals(challengeMethod)
-        || !githostAudience.equals(audience)) {
-      throw OAuthException.invalidRequest("invalid workstation authorization request");
+    PublicClient client =
+        publicClients
+            .byId(requestedClientId)
+            .orElseThrow(() -> OAuthException.invalidRequest("invalid workstation authorization request"));
+    URI callback = redirectTarget(client, redirectUri);
+    boolean reportable = client.cli() && !isLoopback(callback);
+    try {
+      if (!RESPONSE_TYPE_CODE.equals(responseType) || !S256.equals(challengeMethod)) {
+        throw OAuthException.invalidRequest("invalid workstation authorization request");
+      }
+      if (client.cli()) {
+        if (audience != null && !audience.isBlank()) {
+          // The CLI's audiences are qits.idp.cli.audiences and nothing else. Refusing the parameter
+          // rather than ignoring it keeps the answer honest: a tool that asked for one and silently
+          // got another list would have no way to notice.
+          throw OAuthException.invalidRequest("qits-cli does not choose its own audience");
+        }
+      } else if (!githostAudience.equals(audience)) {
+        throw OAuthException.invalidRequest("invalid workstation authorization request");
+      }
+      WorkstationCredentials.requireChallenge(codeChallenge);
+
+      Optional<Sessions.Live> session = sessions.resolve(sessionToken);
+      if (session.isEmpty()) {
+        return Response.seeOther(signIn(uriInfo)).build();
+      }
+      WorkstationCredentials.AuthorizationCode code =
+          workstations.authorize(client, session.get().userId(), redirectUri, codeChallenge);
+      return Response.seeOther(withParams(callback, "code", code.value(), state)).build();
+    } catch (OAuthException refused) {
+      if (!reportable) {
+        throw refused;
+      }
+      return Response.seeOther(withParams(callback, "error", refused.error(), state)).build();
     }
-    WorkstationCredentials.requireChallenge(codeChallenge);
-    URI callback = loopbackRedirect(redirectUri);
-    WorkstationCredentials.AuthorizationCode code =
-        workstations.authorize(session.userId(), redirectUri, codeChallenge);
-    UriBuilder response = UriBuilder.fromUri(callback).queryParam("code", code.value());
-    if (state != null) {
-      response.queryParam("state", state);
-    }
-    return Response.seeOther(response.build()).build();
   }
 
-  /** List revocable workstation grants for the signed-in account. */
+  /**
+   * One signed-in device, as the account's own page reads it.
+   *
+   * <p>{@code kind} is what the page renders, and it is resolved HERE rather than in the browser:
+   * the client ids are configuration, so a page that matched on {@code "qits-cli"} would be a
+   * second copy of a deployment's setting and would silently mislabel an installation that renamed
+   * one. A family whose client id is no longer configured at all keeps its id and reports {@code
+   * unknown} — it is still the person's to revoke, which is the only thing the page needs of it.
+   */
+  public record Device(
+      UUID id,
+      String clientId,
+      String kind,
+      java.time.Instant createdAt,
+      java.time.Instant expiresAt,
+      java.time.Instant revokedAt) {}
+
+  /** List revocable public-client grants for the signed-in account. */
+  @GET
+  @Path("/api/devices")
+  public java.util.List<Device> devices(@CookieParam(SessionCookie.NAME) String sessionToken) {
+    return workstations.list(requireSession(sessionToken).userId()).stream()
+        .map(
+            family ->
+                new Device(
+                    family.id(),
+                    family.clientId(),
+                    publicClients
+                        .byId(family.clientId())
+                        .map(client -> client.kind().name().toLowerCase(java.util.Locale.ROOT))
+                        .orElse("unknown"),
+                    family.createdAt(),
+                    family.expiresAt(),
+                    family.revokedAt()))
+        .toList();
+  }
+
+  /**
+   * The name this listing had when a workstation was the only thing it could hold.
+   *
+   * <p>Kept working rather than redirected: it is a cross-repository contract, and the answer is
+   * the same one — every entry now carries its {@code clientId}, so a reader that ignores the field
+   * sees exactly what it saw before plus the CLI's own rows.
+   */
   @GET
   @Path("/api/workstations")
-  public java.util.List<WorkstationCredentials.Workstation> list(
-      @CookieParam(SessionCookie.NAME) String sessionToken) {
-    return workstations.list(requireSession(sessionToken).userId());
+  public java.util.List<Device> list(@CookieParam(SessionCookie.NAME) String sessionToken) {
+    return devices(sessionToken);
   }
 
-  /** Revoke a workstation grant. A foreign id is indistinguishable from no such grant. */
+  /** Revoke a grant. A foreign id is indistinguishable from no such grant. */
+  @DELETE
+  @Path("/api/devices/{familyId}")
+  public Response revokeDevice(
+      @CookieParam(SessionCookie.NAME) String sessionToken,
+      @jakarta.ws.rs.PathParam("familyId") UUID familyId) {
+    if (!workstations.revoke(requireSession(sessionToken).userId(), familyId)) {
+      throw OAuthException.notFound("signed-in device not found");
+    }
+    return Response.noContent().build();
+  }
+
+  /** The older spelling of the revoke above, kept for the same reason the listing is. */
   @DELETE
   @Path("/api/workstations/{familyId}")
   public Response revoke(
       @CookieParam(SessionCookie.NAME) String sessionToken,
       @jakarta.ws.rs.PathParam("familyId") UUID familyId) {
-    if (!workstations.revoke(requireSession(sessionToken).userId(), familyId)) {
-      throw OAuthException.notFound("workstation credential not found");
-    }
-    return Response.noContent().build();
+    return revokeDevice(sessionToken, familyId);
   }
 
   private Sessions.Live requireSession(String sessionToken) {
@@ -105,21 +212,92 @@ public class IdpWorkstationController {
         .orElseThrow(() -> AuthException.invalidCredentials("a signed-in session is required"));
   }
 
+  // --- where a browser is sent ------------------------------------------------------------------
+
+  /**
+   * The sign-in page, carrying this very request back as its return location.
+   *
+   * <p>The query string is forwarded RAW — it is the caller's own PKCE challenge, state and
+   * redirect URI, and re-encoding parameter by parameter would be a second parser to keep in step
+   * with the one above. {@link UriBuilder} escapes it once as a parameter value, the login page
+   * hands it back to {@code /api/auth/return-location}, and {@link BrowserSso} decides whether the
+   * authority may receive a browser at all. This one can: it is the canonical origin, which that
+   * class refuses to start without on its own allow-list.
+   */
+  private URI signIn(UriInfo uriInfo) {
+    String query = uriInfo.getRequestUri().getRawQuery();
+    String here = prefix() + "/authorize" + (query == null || query.isBlank() ? "" : "?" + query);
+    return UriBuilder.fromUri(browserSso.canonicalOrigin() + prefix() + LOGIN_PAGE_PATH)
+        .queryParam("return_host", browserSso.canonicalAuthority())
+        .queryParam("return_path", here)
+        .build();
+  }
+
+  private static URI withParams(URI callback, String name, String value, String state) {
+    UriBuilder built = UriBuilder.fromUri(callback).queryParam(name, value);
+    if (state != null) {
+      built.queryParam("state", state);
+    }
+    return built.build();
+  }
+
+  /**
+   * The redirect target this client may use, as an exact match.
+   *
+   * <p>The CLI's own page is compared against strings BUILT FROM CONFIGURATION — never assembled
+   * from anything in the request — so there is no spelling of {@code redirect_uri} that can widen
+   * it. Two spellings are accepted because this installation has two true names for itself: the
+   * origin a browser reaches ({@code qits.idp.browser-sso.canonical-origin}, which is what the
+   * person's browser will actually load) and {@code qits.idp.issuer}, which every deployment so far
+   * sets to the platform-network address services dial. They are usually different hosts, and a
+   * tool configured from the discovery document knows only the second, so refusing it would make
+   * the documented {@code <issuer>/connect/cli} wrong in practice.
+   *
+   * <p>A loopback URI stays allowed for both clients, under the rules it always had.
+   */
+  private URI redirectTarget(PublicClient client, String raw) {
+    if (raw == null || raw.isBlank()) {
+      throw OAuthException.invalidRequest("redirect_uri is required");
+    }
+    if (client.cli() && cliPages().contains(raw)) {
+      return URI.create(raw);
+    }
+    return loopbackRedirect(raw);
+  }
+
+  /** Every exact spelling of the code page this installation answers to. */
+  private Set<String> cliPages() {
+    Set<String> pages = new LinkedHashSet<>();
+    pages.add(browserSso.canonicalOrigin() + prefix() + CLI_PAGE_PATH);
+    pages.add(issuer.url() + CLI_PAGE_PATH);
+    return pages;
+  }
+
+  /**
+   * This service's own path prefix, taken from the issuer rather than from {@code quarkus.rest.path}
+   * — the same string by construction, because the issuer is documented as the base of every
+   * endpoint the discovery document advertises, and one source cannot drift from itself.
+   */
+  private String prefix() {
+    String path = URI.create(issuer.url()).getRawPath();
+    return path == null || "/".equals(path) ? "" : path;
+  }
+
+  private static boolean isLoopback(URI uri) {
+    String host = uri.getHost();
+    return "127.0.0.1".equals(host) || "[::1]".equals(host) || "::1".equals(host);
+  }
+
   /**
    * OAuth loopback redirects are intentionally narrow: HTTP only, a numeric loopback IP, an
    * ephemeral listener port, no query/user-info/fragment. Restricting the host prevents an open
    * redirect while the exact original spelling remains bound to the authorization code.
    */
   private static URI loopbackRedirect(String raw) {
-    if (raw == null || raw.isBlank()) {
-      throw OAuthException.invalidRequest("redirect_uri is required");
-    }
     try {
       URI uri = new URI(raw);
-      String host = uri.getHost();
-      boolean loopback = "127.0.0.1".equals(host) || "[::1]".equals(host) || "::1".equals(host);
       if (!"http".equals(uri.getScheme())
-          || !loopback
+          || !isLoopback(uri)
           || uri.getPort() < 1
           || uri.getUserInfo() != null
           || uri.getRawQuery() != null

@@ -113,6 +113,25 @@ public class BrowserSso {
     return cookieDomain;
   }
 
+  /**
+   * The origin a browser actually reaches this idp on — scheme and authority, no trailing slash.
+   *
+   * <p><b>Not the issuer.</b> {@code qits.idp.issuer} is the address services dial over the
+   * platform network ({@code http://qits-platform-idp:8080/idp} in every deployment shipped so
+   * far), and no browser can resolve that name. Anything a person's browser is sent to — the
+   * sign-in bounce, and the CLI code page a {@code redirect_uri} may name — is built from this
+   * instead. It is configuration either way, which is the property that matters: neither is taken
+   * from the request.
+   */
+  String canonicalOrigin() {
+    return canonical.getScheme() + "://" + canonicalAuthority();
+  }
+
+  /** The canonical origin's authority — validated at startup to be on the allow-list. */
+  String canonicalAuthority() {
+    return authority(canonical.getAuthority());
+  }
+
   /** A safe, absolute destination. A missing or refused host lands at the platform's front door. */
   String returnLocation(String requestedHost, String requestedPath) {
     String host = authority(requestedHost);
