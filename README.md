@@ -222,12 +222,17 @@ The rules around them:
   minted. So narrowing an owner's audiences narrows every credential it commissioned, at once.
 - **Unless its kind has roles of its own:** `qits.idp.commission.roles.<contextKind>=<role>,<role>`
   replaces the owner's roles for every credential of that kind (audiences stay the owner's). No
-  line means the owner's roles. Nothing sets one yet; phase 4 of the plan sets the agent kinds to
-  `qits:agent`. A `clients/…` role there makes those credentials unusable (400). A credential may
-  always hand itself back (`DELETE` of its own id), whatever roles its kind gives it.
+  line means the owner's roles. The jar ships four (phase 4 of the plan): `workspace`,
+  `agent-container` and `refinement` get `qits:agent`; `ci-run` gets `qits:ci-run`. Agents and CI
+  runs are domain-scoped, so they inherit neither `qits:system` nor `qits:admin`; their Git scope
+  is their `git_refs`. A deployment overrides a kind with `QITS_IDP_COMMISSION_ROLES_<KIND>` (dash as
+  underscore); an empty value gives that kind its owner's roles again. A `clients/…` role there
+  makes those credentials unusable (400). A credential may always mint and hand itself back
+  (`DELETE` of its own id), whatever roles its kind gives it.
 - **Reads accept `qits:agent`; writes do not.** Agents keep every read they have and lose only
   write access (user ruling 2026-09-12). Here that is `GET /idp/api/clients`, which accepts
-  `qits-platform:system` or `qits:agent`. `POST`, `PUT` and `DELETE` are unchanged.
+  `qits-platform:system` or `qits:agent` — not `qits:ci-run`, so a CI run's credential gets 403
+  there. `POST`, `PUT` and `DELETE` are unchanged.
 - **Its Git refs are its own.** The optional `gitRefs` member states what the credential may push;
   every token then carries it as `git_refs`. Not stated means no claim, as before. The rules, each a
   400 with nothing written: every entry starts with `refs/heads/`; `*` only as a trailing `/*`; at
@@ -417,11 +422,10 @@ to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 
 ## What is not here yet
 
-**Per-context permission scoping.** A commissioned credential gets its owner's roles today, narrowed
-only by the claims and Git refs its commission states. Roles per context kind exist
-(`qits.idp.commission.roles.<kind>`) but nothing sets one yet. The follow-up narrows the rest per
-context — ci may publish, a refinement container may not — and is the same day the token lifetime
-is worth shrinking again.
+**Per-context audience scoping.** A commissioned credential gets its owner's audiences, narrowed only
+by the claims and Git refs its commission states. Its roles are its kind's own for the agent kinds
+and `ci-run` (`qits.idp.commission.roles.<kind>`), else its owner's. The follow-up narrows the
+audiences per kind, and is the same day the token lifetime is worth shrinking again.
 
 **Authorization.** Roles are stored, reported by introspection and delivered to every service, and
 **nothing enforces one yet**. Which route demands which role is a later plan, together with

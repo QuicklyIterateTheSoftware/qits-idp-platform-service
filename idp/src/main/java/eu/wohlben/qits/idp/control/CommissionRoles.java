@@ -11,10 +11,11 @@ import org.eclipse.microprofile.config.Config;
  * {@code qits.idp.commission.roles.<contextKind>=<role>,<role>}.
  *
  * <p><b>No line, or an empty one, means the owner's roles.</b> That is what every commission got
- * before this key existed, and what every kind gets until a deployment sets one. Phase 4 of {@code
- * principal-bound-git-refs-plan.md} (qits superproject) sets the agent kinds to {@code qits:agent},
- * so an agent stops inheriting {@code qits:system} from the service that commissioned it. Nothing
- * sets the key yet.
+ * before this key existed. Phase 4 of {@code principal-bound-git-refs-plan.md} (qits superproject)
+ * ships lines for four kinds in the jar's {@code META-INF/microprofile-config.properties}: {@code
+ * workspace}, {@code agent-container} and {@code refinement} get {@code qits:agent}, {@code ci-run}
+ * gets {@code qits:ci-run}. So an agent or a CI run no longer inherits {@code qits:system} from the
+ * service that commissioned it. Every other kind keeps its owner's roles.
  *
  * <p>Only the roles change. Audiences stay the owner's; claims stay the owner's plus the
  * commission's own. {@link ClientRegistry} refuses a {@code clients/…} role here, as it does on a

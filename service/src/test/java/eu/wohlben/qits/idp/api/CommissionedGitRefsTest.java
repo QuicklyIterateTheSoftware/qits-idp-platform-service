@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import org.jose4j.jwt.JwtClaims;
 import org.junit.jupiter.api.Test;
 
@@ -326,6 +327,91 @@ public class CommissionedGitRefsTest {
     replace(agent.clientId(), agent.secret(), agent.clientId(), List.of()).statusCode(403);
 
     decommission(OWNER, OWNER_SECRET, agent.clientId()).statusCode(204);
+  }
+
+  // --- phase 4: the kinds the jar ships roles for -------------------------------------------------
+
+  /** The shipped lines in the idp jar's META-INF/microprofile-config.properties, as they are. */
+  private static final Map<String, String> SHIPPED_KINDS =
+      Map.of(
+          "workspace", "qits:agent",
+          "agent-container", "qits:agent",
+          "refinement", "qits:agent",
+          "ci-run", "qits:ci-run");
+
+  @Test
+  public void eachShippedKindCarriesExactlyItsRoleAndItsSelfRole() throws Exception {
+    for (Map.Entry<String, String> kind : SHIPPED_KINDS.entrySet()) {
+      Commission commission =
+          created(OWNER, OWNER_SECRET, body(kind.getKey(), "shipped-roles", List.of(TICKET)));
+
+      JwtClaims claims = claimsOf(commission.clientId(), commission.secret());
+      assertEquals(
+          List.of(kind.getValue(), "clients/" + commission.clientId()),
+          claims.getStringListClaimValue("groups"),
+          kind.getKey() + ": its kind's role and its own self-role; not the owner's roles");
+      assertEquals(
+          List.of("prod-qits-ci", "qits-deployments"),
+          PublishedJwks.audienceOf(claims),
+          kind.getKey() + ": the audiences are still the owner's");
+      assertEquals(kind.getKey(), claims.getClaimValueAsString("context_kind"));
+      assertEquals(List.of(TICKET), claims.getStringListClaimValue("git_refs"));
+      assertEquals("qits", claims.getClaimValueAsString("project"), "the owner's claims, as before");
+
+      decommission(OWNER, OWNER_SECRET, commission.clientId()).statusCode(204);
+    }
+  }
+
+  @Test
+  public void aKindWithoutAShippedLineKeepsItsOwnersRoles() throws Exception {
+    Commission plain = created(OWNER, OWNER_SECRET, body("shipped-none", "ctx-13", null));
+
+    assertEquals(
+        List.of("qits:system", "qits-platform:system", "clients/" + plain.clientId()),
+        claimsOf(plain.clientId(), plain.secret()).getStringListClaimValue("groups"));
+  }
+
+  @Test
+  public void aStaticClientsRolesAreUnchanged() throws Exception {
+    assertEquals(
+        List.of("qits:system", "qits-platform:system", "clients/" + OWNER),
+        claimsOf(OWNER, OWNER_SECRET).getStringListClaimValue("groups"));
+  }
+
+  @Test
+  public void eachShippedKindMintsAndHandsItselfBack() {
+    for (String kind : SHIPPED_KINDS.keySet()) {
+      Commission own = created(OWNER, OWNER_SECRET, body(kind, "shipped-self", null));
+      Commission sibling = created(OWNER, OWNER_SECRET, body(kind, "shipped-sibling", null));
+      token(own.clientId(), own.secret()).statusCode(200);
+
+      // Without the platform role it may not give back another credential ...
+      decommission(own.clientId(), own.secret(), sibling.clientId()).statusCode(403);
+      // ... but it may give back its own.
+      decommission(own.clientId(), own.secret(), own.clientId()).statusCode(204);
+      token(own.clientId(), own.secret()).statusCode(401);
+
+      decommission(OWNER, OWNER_SECRET, sibling.clientId()).statusCode(204);
+    }
+  }
+
+  @Test
+  public void theListingAcceptsTheAgentRoleAndNotTheCiRunRole() {
+    // Reads accept qits:agent (user ruling 2026-09-12). qits:ci-run is not an agent role, so a CI
+    // run's credential is refused here; nothing a run does lists commissions.
+    for (Map.Entry<String, String> kind : SHIPPED_KINDS.entrySet()) {
+      Commission commission = created(OWNER, OWNER_SECRET, body(kind.getKey(), "shipped-list", null));
+      int expected = BasicCaller.AGENT.equals(kind.getValue()) ? 200 : 403;
+
+      given()
+          .header("Authorization", basic(commission.clientId(), commission.secret()))
+          .when()
+          .get("/idp/api/clients")
+          .then()
+          .statusCode(expected);
+
+      decommission(OWNER, OWNER_SECRET, commission.clientId()).statusCode(204);
+    }
   }
 
   // --- the migration --------------------------------------------------------------------------

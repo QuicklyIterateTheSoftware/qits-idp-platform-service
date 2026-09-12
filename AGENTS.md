@@ -117,7 +117,9 @@ A new place that accepts roles from anywhere else has to call `refuseReserved` i
 mint that is not to a client credential must not stamp one — `TokenService.workstation` is the
 standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is what all of it is for.
 The roles per commission kind (`qits.idp.commission.roles.<kind>`, `CommissionRoles`) are such a
-place: `ClientRegistry.rolesFor` calls `refuseReserved` on them.
+place: `ClientRegistry.rolesFor` calls `refuseReserved` on them. The jar ships lines for
+`workspace`, `agent-container`, `refinement` (`qits:agent`) and `ci-run` (`qits:ci-run`); the suite
+tests them as shipped, so a change to those lines is a change to `CommissionedGitRefsTest`.
 
 **Every read route accepts `qits:agent`; no write route does** (user ruling 2026-09-12: agents keep
 every read and lose only write access). Today the one read route with a role check is `GET
@@ -332,8 +334,9 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   token carries `git_refs` and `context_kind` (static client: neither), a commission with and
   without `gitRefs`, the empty list reaching the token as `[]`, each validation rule as a 400 with no
   row, the owner-only `PUT …/git-refs` (foreign or unknown is 404, the credential itself 403) and the
-  next token after it, roles per kind (`agent-test` and `reserved-test` in the suite's config), and
-  V7's column. `GitRefsTest` is the same rules as plain unit tests. The person tokens' `git_refs`
+  next token after it, roles per kind (`agent-test` and `reserved-test` in the suite's config, and
+  the four shipped kinds as shipped), and V7's column. `GitRefsTest` is the same rules as plain unit
+  tests; `CommissionRolesTest` is how a deployment overrides a shipped kind. The person tokens' `git_refs`
   are pinned in `CliOAuthTest` and `WorkstationOAuthTest`.
 - `UserAuthenticationTest` is the user surface end to end, and its cases are the invariants: a
   register token makes exactly one account, the two bootstrap roles are granted as rows, the cookie
