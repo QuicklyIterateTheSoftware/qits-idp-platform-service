@@ -134,7 +134,8 @@ with it. `qits-deployments` is an audience with no client: it receives tokens an
 environment service carries its environment (`prod-qits-ci`); a platform service is its repository
 name and nothing else — `qits-platform-artifacts`, and `qits-deployments` since the deployer became
 one. Get the two sides out of step and the failure is a silent 401 at the resource service, with a
-valid token nobody rejected here.
+valid token nobody rejected here. The one exception is a person's `qits` CLI token: its audience is
+`qits-platform`, a platform-wide name every service accepts, and its roles are the permission.
 
 **No secret ships with any of them, and a client with a blank secret is unusable rather than open.**
 An unconfigured deployment therefore issues nothing; `QITS_IDP_CLIENT_PROD_QITS_CI_SECRET=…` is what

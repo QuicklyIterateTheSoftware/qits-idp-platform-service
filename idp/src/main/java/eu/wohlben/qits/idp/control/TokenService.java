@@ -60,10 +60,11 @@ public class TokenService {
   /**
    * The resources a signed-in CLI may target — CONFIGURED, never derived from the request.
    *
-   * <p>The list is what the deployed edge demands on the vhosts the tool actually calls, and it is
-   * env-prefixed like every other audience key here.  A CLI naming its own audience would be a
-   * public client choosing its own blast radius, so {@code /authorize} refuses an {@code audience}
-   * parameter for this client outright and this value is the whole answer.
+   * <p>By default it is one platform-wide audience, {@code qits-platform}, with no environment
+   * prefix: the edge and every service accept it, and the token's roles decide what the person may
+   * do. A CLI naming its own audience would be a public client choosing its own blast radius, so
+   * {@code /authorize} refuses an {@code audience} parameter for this client outright and this value
+   * is the whole answer.
    */
   @ConfigProperty(name = "qits.idp.cli.audiences")
   List<String> cliAudiences;

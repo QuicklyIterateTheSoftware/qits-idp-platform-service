@@ -81,15 +81,15 @@ public class CliOAuthTest {
     String access = exchanged.jsonPath().getString("access_token");
     String firstRefresh = exchanged.jsonPath().getString("refresh_token");
 
-    JwtClaims claims = PublishedJwks.verify(access, "prod-qits-projects");
+    JwtClaims claims = PublishedJwks.verify(access, "qits-platform");
     assertEquals(session.session().userId().toString(), claims.getSubject());
     assertEquals("cli", claims.getClaimValueAsString("credential_type"));
     // The person's OWN roles, which is the epic's decision: the CLI is as strong as the browser
     // session the same person just signed in with.
     assertEquals(List.of("qits:admin"), claims.getStringListClaimValue("groups"));
-    // The configured audiences, both of them, and nothing the request asked for.
-    assertEquals(
-        List.of("prod-qits-projects", "prod-qits-events"), claims.getAudience());
+    // The one platform-wide audience, and nothing the request asked for. The roles above are the
+    // permission; the audience only says "any qits service".
+    assertEquals(List.of("qits-platform"), claims.getAudience());
     // A person is not a machine client, so no `clients/…` stamp — the same rule the workstation
     // token keeps, and the reason a resource service may gate a door on that prefix.
     assertFalse(
