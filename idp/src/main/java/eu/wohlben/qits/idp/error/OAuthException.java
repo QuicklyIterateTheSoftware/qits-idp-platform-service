@@ -74,4 +74,13 @@ public class OAuthException extends RuntimeException {
   public static OAuthException notFound(String description) {
     return new OAuthException("not_found", 404, description);
   }
+
+  /**
+   * The service-client management API's one extra case: a create where a database row already
+   * exists, or a delete of the caller's own row. 409, because the request is well formed and the
+   * caller is allowed here — the state of the row is what stands in the way.
+   */
+  public static OAuthException conflict(String description) {
+    return new OAuthException("conflict", 409, description);
+  }
 }
