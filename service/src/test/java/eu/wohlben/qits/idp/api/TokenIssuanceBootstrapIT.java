@@ -243,9 +243,11 @@ public class TokenIssuanceBootstrapIT {
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer(), "iss is the configured issuer");
     assertEquals(CLIENT, claims.getSubject(), "sub is the client that authenticated");
     assertEquals(
-        List.of(AUDIENCE),
+        List.of(AUDIENCE, "qits-platform"),
         PublishedJwks.audienceOf(claims),
-        "aud is exactly the audience that was asked for, never the whole allowed list");
+        "aud is exactly the audience that was asked for, never the whole allowed list — plus"
+            + " qits-platform, which rides along on every token transitionally"
+            + " (service-client-identity-plan.md, C2)");
     // The claim pinned whole rather than searched: `groups` is the token's shape, and a change to
     // it is a change every consumer reads. The two system roles are this client's SHIPPED lines;
     // the third is the self-role the idp mints from the id that authenticated and grants nowhere,
@@ -265,7 +267,8 @@ public class TokenIssuanceBootstrapIT {
                 + CLIENT
                 + "), what it may be presented to (aud="
                 + AUDIENCE
-                + ") and what it is (groups = the configured system roles plus clients/"
+                + " plus qits-platform, which rides along transitionally) and what it is (groups ="
+                + " the configured system roles plus clients/"
                 + CLIENT
                 + ", the self-role this service stamps and nobody can be granted)")
         .as("bearer-answered");

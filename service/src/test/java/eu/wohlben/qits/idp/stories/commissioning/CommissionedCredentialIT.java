@@ -49,11 +49,13 @@ import org.junit.jupiter.api.BeforeAll;
  * -> 200}, from a different actor and otherwise the same.
  *
  * <p><b>And the credential is its own identity, not a copy of its owner's.</b> It is issued its
- * owner's audiences, roles and claims — resolved at mint time from the owner's record rather than
- * copied into the row — but the {@code clients/…} self-role is stamped from the id in {@code sub},
- * so it carries {@code clients/dyn-…} and never {@code clients/prod-qits-workspaces}. A door held
- * open for the owner stays shut to the credential it commissioned. That falls out of the mechanism
- * and this story asserts it rather than trusting it.
+ * owner's audiences — resolved at mint time from the owner's record rather than copied into the
+ * row — but its roles are its own context kind's fixed ones in code, or none (D12 of
+ * {@code service-client-identity-plan.md}), and its claims are only what it stated for itself (D3).
+ * The {@code clients/…} self-role is stamped from the id in {@code sub}, so it carries {@code
+ * clients/dyn-…} and never {@code clients/prod-qits-workspaces}. A door held open for the owner
+ * stays shut to the credential it commissioned. That falls out of the mechanism and this story
+ * asserts it rather than trusting it.
  *
  * <h2>The one declared edge in this catalogue lives here</h2>
  *
@@ -120,11 +122,12 @@ public class CommissionedCredentialIT {
       client and is never told which half answered. That identity is the whole commission model
       working: nothing else on the platform needs a second code path for a commissioned pair.
 
-      The bearer it gets is its owner's REACH and its own IDENTITY. The audiences and the roles are
-      resolved from the owner's record at mint time, so narrowing the owner narrows every
-      credential it commissioned, at once. The `clients/…` self-role is not: that is stamped from
-      the id in `sub`, so the credential carries `clients/dyn-…` and never its owner's — a door
-      held open for qits-platform-workspaces stays shut to the container it provisioned.
+      The bearer it gets is its owner's REACH and its own IDENTITY. The audiences are resolved from
+      the owner's record at mint time, so narrowing the owner narrows every credential it
+      commissioned, at once. Its roles are NOT the owner's: they are this context kind's fixed role
+      in code, or none at all. The `clients/…` self-role is stamped from the id in `sub`, so the
+      credential carries `clients/dyn-…` and never its owner's — a door held open for
+      qits-platform-workspaces stays shut to the container it provisioned.
 
       Then the context ends. The owner deletes the row and the credential mints nothing from the
       very next request onward — no TTL, no propagation delay, no second instance holding a stale
@@ -223,28 +226,28 @@ public class CommissionedCredentialIT {
     assertEquals(
         clientId, claims.getSubject(), "sub is the commissioned id, never the owner's");
     assertEquals(
-        List.of(StoryTarget.ARTIFACTS_AUDIENCE),
+        List.of(StoryTarget.ARTIFACTS_AUDIENCE, "qits-platform"),
         PublishedJwks.audienceOf(claims),
-        "aud is exactly what was asked for, out of the OWNER's shipped list");
+        "aud is exactly what was asked for, out of the OWNER's shipped list — plus qits-platform,"
+            + " which rides along transitionally (service-client-identity-plan.md, C2)");
     List<String> groups = claims.getStringListClaimValue("groups");
     assertEquals(
-        List.of(
-            StoryTarget.SYSTEM_ROLE,
-            StoryTarget.PLATFORM_SYSTEM_ROLE,
-            StoryTarget.selfRoleOf(clientId)),
+        List.of(StoryTarget.selfRoleOf(clientId)),
         groups,
-        "the OWNER's configured roles, then the credential's OWN self-role");
+        "this story's own kind has no fixed role (D12 of service-client-identity-plan.md), so the"
+            + " credential carries only its own self-role — never the owner's roles any more");
     assertFalse(
         groups.contains(StoryTarget.selfRoleOf(StoryTarget.WORKSPACES)),
         "and never the owner's self-role: a door held open for the owner stays shut to what it"
             + " commissioned");
     story
         .note(
-            "the bearer carries the OWNER's reach and its OWN identity: the audiences and roles are"
-                + " resolved from the owner's record at mint time, so narrowing the owner narrows"
-                + " every credential it commissioned at once — while the clients/… self-role is"
-                + " stamped from the id in sub, so it is the credential's own and never"
-                + " qits-platform-workspaces'")
+            "the bearer carries the OWNER's reach and its OWN identity: the audiences are resolved"
+                + " from the owner's record at mint time, so narrowing the owner narrows every"
+                + " credential it commissioned at once. Its roles are NOT the owner's any more —"
+                + " they are this context kind's fixed role in code, or none — and its claims are"
+                + " only what it stated for itself. The clients/… self-role is stamped from the id"
+                + " in sub, so it is the credential's own and never qits-platform-workspaces'")
         .as("the-bearer-is-its-owners-reach-and-its-own-identity");
 
     // ---- the owner can see what it holds, which is how a crash cannot leak a credential --------

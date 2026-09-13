@@ -54,7 +54,8 @@ public class IdpTokenTest {
     JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals("test-broad", claims.getSubject());
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
-    assertEquals(List.of("qits-deployments"), PublishedJwks.audienceOf(claims));
+    // qits-platform rides along on every token, transitionally (service-client-identity-plan.md, C2).
+    assertEquals(List.of("qits-deployments", "qits-platform"), PublishedJwks.audienceOf(claims));
     // The configured roles, then the self-role this service stamps. The whole claim is pinned
     // rather than searched: `groups` is the token's shape, and a change to it is a change every
     // consumer reads.
@@ -99,7 +100,8 @@ public class IdpTokenTest {
 
     JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals(
-        List.of("prod-qits-ci", "qits-deployments"), PublishedJwks.audienceOf(claims));
+        List.of("prod-qits-ci", "qits-deployments", "qits-platform"),
+        PublishedJwks.audienceOf(claims));
   }
 
   @Test

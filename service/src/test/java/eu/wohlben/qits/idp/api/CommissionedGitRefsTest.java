@@ -33,8 +33,12 @@ import org.junit.jupiter.api.Test;
  * WorkstationOAuthTest}; the rules for one list in {@code GitRefsTest}.
  *
  * <p>Every test names its own {@code contextKind}: the suite shares one store, so a listing check
- * filters on it. {@code agent-test} and {@code reserved-test} have roles of their own in {@code
- * src/test/resources/application.properties}.
+ * filters on it. <b>Roles per kind are code now, not configuration</b>
+ * (service-client-identity-plan.md, D3/D12): a commission's role is its context kind's fixed one
+ * ({@code workspace}, {@code agent-container}, {@code refinement} → {@code qits:agent}; {@code
+ * ci-run} → {@code qits:ci-run}) or, for any other kind, none at all beyond its own self-role. There
+ * is no longer a way to configure one, so these tests exercise the four shipped kinds and an
+ * invented, deliberately unknown one rather than a test-only configured kind.
  */
 @QuarkusTest
 public class CommissionedGitRefsTest {
@@ -87,10 +91,9 @@ public class CommissionedGitRefsTest {
     JwtClaims claims = claimsOf(commission.clientId(), commission.secret());
     assertEquals(List.of(EPIC, FEATURES), claims.getStringListClaimValue("git_refs"));
     assertEquals("refs-stated", claims.getClaimValueAsString("context_kind"));
-    // The owner's roles, as before: stating a list changes nothing but the list.
+    // refs-stated has no fixed role (D12): stating a Git refs list changes nothing about roles.
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + commission.clientId()),
-        claims.getStringListClaimValue("groups"));
+        List.of("clients/" + commission.clientId()), claims.getStringListClaimValue("groups"));
 
     assertEquals(EPIC + "\n" + FEATURES, row(commission.clientId()).gitRefs);
     given()
@@ -259,42 +262,31 @@ public class CommissionedGitRefsTest {
   // --- C2: roles per context kind ---------------------------------------------------------------
 
   @Test
-  public void aKindWithRolesOfItsOwnGetsThemInsteadOfTheOwners() throws Exception {
-    Commission agent = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-8", List.of(TICKET)));
+  public void aShippedKindGetsItsFixedRoleInsteadOfTheOwners() throws Exception {
+    Commission agent = created(OWNER, OWNER_SECRET, body("workspace", "ctx-8", List.of(TICKET)));
 
     JwtClaims claims = claimsOf(agent.clientId(), agent.secret());
     assertEquals(
         List.of("qits:agent", "clients/" + agent.clientId()),
         claims.getStringListClaimValue("groups"),
-        "the kind's roles and the credential's own self-role; not qits:system");
+        "the kind's fixed role and the credential's own self-role; not qits:system");
     assertEquals(
-        List.of("prod-qits-ci", "qits-deployments"),
+        List.of("prod-qits-ci", "qits-deployments", "qits-platform"),
         PublishedJwks.audienceOf(claims),
-        "only the roles change: the audiences are still the owner's");
-    assertEquals("agent-test", claims.getClaimValueAsString("context_kind"));
+        "only the roles change: the audiences are still the owner's, plus qits-platform");
+    assertEquals("workspace", claims.getClaimValueAsString("context_kind"));
 
-    // A kind with no line keeps the owner's roles, exactly as before the key existed.
-    Commission plain = created(OWNER, OWNER_SECRET, body("agent-test-plain", "ctx-8", null));
+    // A kind with no fixed role gets none at all any more (D12) — not the owner's.
+    Commission plain = created(OWNER, OWNER_SECRET, body("kind-with-no-line", "ctx-8b", null));
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + plain.clientId()),
+        List.of("clients/" + plain.clientId()),
         claimsOf(plain.clientId(), plain.secret()).getStringListClaimValue("groups"));
   }
 
   @Test
-  public void aReservedRoleInAKindsLineMakesItsCredentialsUnusable() {
-    Commission thief = created(OWNER, OWNER_SECRET, body("reserved-test", "ctx-9", null));
-
-    token(thief.clientId(), thief.secret())
-        .statusCode(400)
-        .body("error", equalTo("invalid_request"));
-
-    decommission(OWNER, OWNER_SECRET, thief.clientId()).statusCode(204);
-  }
-
-  @Test
   public void aCredentialWithItsKindsRolesMayStillHandItselfBack() {
-    Commission agent = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-10", null));
-    Commission other = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-11", null));
+    Commission agent = created(OWNER, OWNER_SECRET, body("workspace", "ctx-10", null));
+    Commission other = created(OWNER, OWNER_SECRET, body("workspace", "ctx-11", null));
 
     // It lacks the platform role, so it may not decommission another credential.
     decommission(agent.clientId(), agent.secret(), other.clientId()).statusCode(403);
@@ -307,9 +299,9 @@ public class CommissionedGitRefsTest {
 
   @Test
   public void anAgentKeepsItsReadsAndLosesOnlyWrites() {
-    // User ruling 2026-09-12: agents keep every read; only writes are restricted. The agent-test
-    // kind carries qits:agent instead of its owner's roles.
-    Commission agent = created(OWNER, OWNER_SECRET, body("agent-test", "ctx-12", null));
+    // User ruling 2026-09-12: agents keep every read; only writes are restricted. The workspace
+    // kind carries qits:agent, its fixed role (D3/D12) — never the owner's.
+    Commission agent = created(OWNER, OWNER_SECRET, body("workspace", "ctx-12", null));
 
     // The one read route with a role check: the listing. It commissions nothing, so it is empty —
     // the answer it got while it carried its owner's roles.
@@ -351,24 +343,27 @@ public class CommissionedGitRefsTest {
           claims.getStringListClaimValue("groups"),
           kind.getKey() + ": its kind's role and its own self-role; not the owner's roles");
       assertEquals(
-          List.of("prod-qits-ci", "qits-deployments"),
+          List.of("prod-qits-ci", "qits-deployments", "qits-platform"),
           PublishedJwks.audienceOf(claims),
-          kind.getKey() + ": the audiences are still the owner's");
+          kind.getKey() + ": the audiences are still the owner's, plus qits-platform");
       assertEquals(kind.getKey(), claims.getClaimValueAsString("context_kind"));
       assertEquals(List.of(TICKET), claims.getStringListClaimValue("git_refs"));
-      assertEquals("qits", claims.getClaimValueAsString("project"), "the owner's claims, as before");
+      assertFalse(
+          claims.hasClaim("project"),
+          kind.getKey() + ": a commission no longer inherits the owner's claims (D3)");
 
       decommission(OWNER, OWNER_SECRET, commission.clientId()).statusCode(204);
     }
   }
 
   @Test
-  public void aKindWithoutAShippedLineKeepsItsOwnersRoles() throws Exception {
+  public void aKindWithoutAShippedLineGetsNoRoleAtAll() throws Exception {
     Commission plain = created(OWNER, OWNER_SECRET, body("shipped-none", "ctx-13", null));
 
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + plain.clientId()),
-        claimsOf(plain.clientId(), plain.secret()).getStringListClaimValue("groups"));
+        List.of("clients/" + plain.clientId()),
+        claimsOf(plain.clientId(), plain.secret()).getStringListClaimValue("groups"),
+        "D12: an unshipped kind gets no role, only its own self-role — never the owner's");
   }
 
   @Test

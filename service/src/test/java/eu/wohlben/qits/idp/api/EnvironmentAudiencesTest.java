@@ -72,7 +72,8 @@ public class EnvironmentAudiencesTest {
     String access =
         exchange(WORKSTATION, WORKSTATION_REDIRECT, code).jsonPath().getString("access_token");
     JwtClaims claims = PublishedJwks.verify(access, "dev-qits-githost");
-    assertEquals(List.of("dev-qits-githost"), claims.getAudience());
+    // qits-platform rides along beside the githost audience now too (service-client-identity-plan.md, C2).
+    assertEquals(List.of("dev-qits-githost", "qits-platform"), claims.getAudience());
   }
 
   @Test
