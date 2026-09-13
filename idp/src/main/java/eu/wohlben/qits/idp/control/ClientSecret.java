@@ -3,7 +3,10 @@ package eu.wohlben.qits.idp.control;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 /**
  * A client's shared secret, and the one operation anything here needs from it: does a presented
@@ -12,51 +15,107 @@ import java.util.Base64;
  * <p>There are two kinds and the difference is where the secret lives, not what it means.
  *
  * <ul>
- *   <li><b>Configured</b> — a static service client's secret, read from {@code
+ *   <li><b>Configured</b> — an environment service client's secret, read from {@code
  *       qits.idp.client.<id>.secret}. The value itself is what the process holds, because the
  *       deployment handed it over that way; there is nothing to hash it against.
- *   <li><b>Stored</b> — a commissioned client's secret, held as a hash in {@code
- *       idp_client.secret_hash}. <b>The plaintext exists once</b>, in the commission response, and
- *       is never written down here. A dump of the idp's database therefore mints nothing.
+ *   <li><b>Stored</b> — a commissioned client's secret, or a database service client's, held as a
+ *       hash in {@code idp_client.secret_hash} or {@code idp_service_client.secret_hash}. <b>The
+ *       plaintext exists once</b>, in the commission or create/rotate response, and is never
+ *       written down here. A dump of the idp's database therefore mints nothing.
  * </ul>
  *
- * <p><b>Why a plain SHA-256 and not bcrypt/argon2.</b> Those exist to make guessing a
- * human-chosen password expensive. A commissioned secret is 256 bits from {@link
- * java.security.SecureRandom} and is never chosen by anyone, so there is no guessing to slow down —
- * only a cost on the token path, which is the platform's whole call graph. A one-way function is
- * what the row needs and all it needs. If a caller-chosen secret ever becomes possible, this is the
- * class that has to change, and the prefix below is what lets a second scheme land beside the first.
+ * <p><b>A database service client during a rotation carries two hashes.</b> {@code
+ * ServiceClients.rotate} keeps the previous hash live for fifteen minutes (D4 of
+ * {@code service-client-identity-plan.md}), so a start-first rollback to the predecessor container
+ * — still holding the old secret — is not locked out. {@link #serviceClient} is where both hashes,
+ * and the environment secret during the migration overlap, are tried in one place: environment
+ * value, current hash, then the previous hash while it is still live. The expiry is checked at
+ * {@link #matches}, not at construction, because a resolved client can sit in a request-scoped
+ * lookup for longer than an instant.
  *
  * <p>Both kinds compare with {@link MessageDigest#isEqual}, never {@code String.equals}: the
  * comparison is against a value a caller may retry freely.
+ *
+ * <p><b>Why a plain SHA-256 and not bcrypt/argon2.</b> Those exist to make guessing a
+ * human-chosen password expensive. A commissioned or a database service client's secret is 256 bits
+ * from {@link java.security.SecureRandom} and is never chosen by anyone, so there is no guessing to
+ * slow down — only a cost on the token path, which is the platform's whole call graph. A one-way
+ * function is what the row needs and all it needs.
  */
 public final class ClientSecret {
 
   /** Names the scheme in the stored value, so a second one can be added without a migration. */
   private static final String SHA256_PREFIX = "sha-256:";
 
-  private final String configured;
-  private final String storedHash;
+  /** One hash this secret accepts, and until when — null means no expiry. */
+  private record Hash(String value, Instant validUntil) {
+    boolean live(Instant now) {
+      return validUntil == null || validUntil.isAfter(now);
+    }
+  }
 
-  private ClientSecret(String configured, String storedHash) {
+  private final String configured;
+  private final List<Hash> hashes;
+
+  private ClientSecret(String configured, List<Hash> hashes) {
     this.configured = configured;
-    this.storedHash = storedHash;
+    this.hashes = hashes;
   }
 
   /**
-   * A static client's secret as the deployment set it. Null or blank makes an <b>unusable</b>
+   * An environment client's secret as the deployment set it. Null or blank makes an <b>unusable</b>
    * client — see {@link IdpClient#usable()}.
    */
   public static ClientSecret configured(String value) {
-    return new ClientSecret(value, null);
+    return new ClientSecret(value, List.of());
   }
 
-  /** A commissioned client's secret, as the row holds it. */
+  /** A commissioned client's secret, as the row holds it. No previous hash: commissions never rotate. */
   public static ClientSecret stored(String hash) {
-    return new ClientSecret(null, hash);
+    return new ClientSecret(null, hash == null ? List.of() : List.of(new Hash(hash, null)));
   }
 
-  /** What goes in {@code idp_client.secret_hash} for this plaintext. */
+  /**
+   * A service client resolved during the migration: an environment value when one is configured for
+   * this id, a database current hash, and a database previous hash while it stays live — any of the
+   * three authenticates.
+   *
+   * @param configuredValue the environment secret for this id, or null when there is no environment
+   *     entry
+   * @param currentHash the database row's current hash, or null when there is no database row
+   * @param previousHash the row's previous hash after a rotation, or null when it never rotated or
+   *     the grace has already been dropped from the row
+   * @param previousValidUntil when {@code previousHash} stops being accepted; ignored when {@code
+   *     previousHash} is null
+   */
+  public static ClientSecret serviceClient(
+      String configuredValue, String currentHash, String previousHash, Instant previousValidUntil) {
+    List<Hash> hashes = new ArrayList<>(2);
+    if (currentHash != null && !currentHash.isBlank()) {
+      hashes.add(new Hash(currentHash, null));
+    }
+    if (previousHash != null && !previousHash.isBlank() && previousValidUntil != null) {
+      hashes.add(new Hash(previousHash, previousValidUntil));
+    }
+    return new ClientSecret(configuredValue, List.copyOf(hashes));
+  }
+
+  /**
+   * Two secrets, either of which authenticates — the dual-source rule for a service client that
+   * exists in both the environment and the database mid-migration: the environment's configured
+   * value (carried by {@code first}, an environment client's own secret) or the database's hash(es)
+   * (carried by {@code second}). Order does not matter; this is symmetric.
+   */
+  public static ClientSecret either(ClientSecret first, ClientSecret second) {
+    String mergedConfigured =
+        first.configured != null && !first.configured.isBlank() ? first.configured : second.configured;
+    List<Hash> mergedHashes = new ArrayList<>(first.hashes.size() + second.hashes.size());
+    mergedHashes.addAll(first.hashes);
+    mergedHashes.addAll(second.hashes);
+    return new ClientSecret(mergedConfigured, List.copyOf(mergedHashes));
+  }
+
+  /** What goes in a {@code secret_hash} column for this plaintext. */
   public static String hash(String plaintext) {
     return SHA256_PREFIX
         + Base64.getUrlEncoder()
@@ -64,23 +123,34 @@ public final class ClientSecret {
             .encodeToString(sha256(plaintext.getBytes(StandardCharsets.UTF_8)));
   }
 
-  /** Whether this secret can authenticate anything at all. A blank one cannot. */
+  /** Whether this secret can authenticate anything at all, right now. A blank one cannot. */
   public boolean usable() {
-    if (storedHash != null) {
-      return !storedHash.isBlank();
+    if (configured != null && !configured.isBlank()) {
+      return true;
     }
-    return configured != null && !configured.isBlank();
+    Instant now = Instant.now();
+    return hashes.stream().anyMatch(hash -> hash.live(now));
   }
 
-  /** Whether {@code candidate} is this secret. False whenever {@link #usable()} is false. */
+  /** Whether {@code candidate} is this secret, by any live source. False when {@link #usable()} is false. */
   public boolean matches(String candidate) {
-    if (!usable() || candidate == null) {
+    if (candidate == null) {
       return false;
     }
-    if (storedHash != null) {
-      return equal(storedHash, hash(candidate));
+    if (configured != null && !configured.isBlank() && equal(configured, candidate)) {
+      return true;
     }
-    return equal(configured, candidate);
+    if (hashes.isEmpty()) {
+      return false;
+    }
+    String candidateHash = hash(candidate);
+    Instant now = Instant.now();
+    for (Hash hash : hashes) {
+      if (hash.live(now) && equal(hash.value(), candidateHash)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static boolean equal(String one, String other) {

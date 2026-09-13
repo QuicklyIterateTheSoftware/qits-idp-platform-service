@@ -1,76 +1,98 @@
 package eu.wohlben.qits.idp.control;
 
 import eu.wohlben.qits.idp.control.DynamicClients.StoredClient;
+import eu.wohlben.qits.idp.control.IdpClient.AudienceSource;
+import eu.wohlben.qits.idp.control.ServiceClients.StoredServiceClient;
 import eu.wohlben.qits.idp.error.OAuthException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.jboss.logging.Logger;
 
 /**
- * Every client this idp knows, from both halves: the static service clients in config and the
- * commissioned clients in {@code idp_client}.
+ * Every client this idp knows, from all three halves: the environment service clients in config,
+ * the database service clients in {@code idp_service_client}, and the commissioned clients in
+ * {@code idp_client}.
  *
- * <p><b>Config is asked first, always.</b> A static id therefore cannot be shadowed by a row, and
- * that ordering is the collision answer rather than a uniqueness check somewhere: whatever ends up
- * in the store, the names services are dialed by keep meaning what the deployment configured.
- * Commissioned ids carry {@link DynamicClients#ID_PREFIX} on top of that, so the two namespaces do
- * not overlap in the first place.
+ * <p><b>Config is asked first, always.</b> An environment id therefore cannot be shadowed by a
+ * database row, and that ordering is the collision answer rather than a uniqueness check somewhere:
+ * whatever ends up in the store, the names services are dialed by keep meaning what the deployment
+ * configured. Commissioned ids carry {@link DynamicClients#ID_PREFIX} on top of that, so all three
+ * namespaces do not overlap in the first place.
  *
- * <p><b>A commissioned client is issued its owner's audiences and roles</b>, read here at mint time
- * rather than copied into the row: a credential commissioned by qits-ci can be used where qits-ci
- * can be used, so nothing has to be enumerated before the credentials can replace the static ones.
- * Two consequences worth knowing: narrowing an owner's audiences narrows every credential it
- * commissioned, at once; and an owner removed from {@code qits.idp.clients} leaves its commissioned
- * clients able to authenticate and entitled to nothing, which is refused as {@code invalid_target}.
- * <b>One exception for roles:</b> a context kind may have roles of its own ({@link
- * CommissionRoles}); with no such line the owner's roles apply, as before.
+ * <p><b>A service client can exist in both places at once, transitionally</b> ({@code
+ * service-client-identity-plan.md}, contract C2, C5): {@code POST /idp/api/service-clients} answers
+ * 201 even for an id that already has an environment entry, so a caller mid-cutover can hold the
+ * old environment secret and the new database one at the same time. When that happens, the
+ * environment entry still decides the client's roles, claims and audience list — the same "config
+ * wins" ordering as {@link #find} — but {@link IdpClient#secret()} accepts either secret: {@link
+ * ClientSecret#either} merges the environment value with the database's current and unexpired
+ * previous hash. An id with only a database row gets the roles/claims/audience rule {@link
+ * #asServiceClient} builds in code.
+ *
+ * <p><b>A commissioned client is issued its owner's audiences</b>, read here at mint time rather
+ * than copied into the row: a credential commissioned by qits-ci can be used where qits-ci can be
+ * used. Narrowing an owner's audiences narrows every credential it commissioned, at once; an owner
+ * removed from the registry leaves its commissioned clients able to authenticate and entitled to
+ * nothing, which is refused as {@code invalid_target}. <b>Its audience RULE also follows its
+ * owner's</b> — {@link IdpClient.AudienceSource} — so a commission owned by a database client gets
+ * the database's unchecked-copy-back rule and one owned by an environment client keeps today's.
+ *
+ * <p><b>Roles and claims are NOT inherited by a commission any more</b> (D3, D12 of the plan). A
+ * commission's roles are its context kind's fixed ones ({@link CommissionRoles}, code, no owner
+ * fallback and no configuration); its claims are only what it stated for itself ({@link
+ * CommissionedClaims}, already resolved into {@link DynamicClients.StoredClient#claims()}).
  *
  * <p><b>The commission's context kind and Git refs ride along</b> on the {@link IdpClient}, and
- * {@link TokenService} stamps them as {@code context_kind} and {@code git_refs}. A static client has
- * neither, so its token carries neither.
- *
- * <p><b>Claims are the one thing a commission may say for itself</b>, and that is the per-context
- * scoping the plan declared. {@link #asClient} merges in one direction only — the owner's grants
- * first, then the row's <em>over</em> them — so a commission narrows its credential and can never
- * hand it something the deployment did not configure. {@link CommissionedClaims} is the rule; a row
- * that states nothing is exactly the inheritance this class has always done, which is every row
- * written before that column existed.
+ * {@link TokenService} stamps them as {@code context_kind} and {@code git_refs}. A service client
+ * has neither, so its token carries neither.
  */
 @ApplicationScoped
 public class ClientRegistry {
 
   private static final Logger LOG = Logger.getLogger(ClientRegistry.class);
 
+  /**
+   * A database service client's fixed roles (D3 of the plan): {@code qits:system} for the open
+   * calling model, plus {@code qits-platform:system} until C8 retires it. {@code "qits:system"} is
+   * spelled here rather than read from {@code BasicCaller.PLATFORM_SYSTEM}: this module has no
+   * compile-time dependency on {@code service} ("Adding a dependency on another context").
+   */
+  private static final List<String> DATABASE_SERVICE_CLIENT_ROLES =
+      List.of("qits:system", "qits-platform:system");
+
+  /** A database service client's one fixed claim (D3): it serves every project. */
+  private static final Map<String, String> DATABASE_SERVICE_CLIENT_CLAIMS =
+      Map.of(ClaimNames.PROJECT, "*");
+
   @Inject IdpClients staticClients;
+
+  @Inject ServiceClients serviceClients;
 
   @Inject DynamicClients dynamicClients;
 
-  @Inject CommissionRoles commissionRoles;
-
-  /** The client with this id, static or commissioned, or empty when there is none. */
+  /** The client with this id, from any of the three registries, or empty when there is none. */
   public Optional<IdpClient> find(String clientId) {
-    Optional<IdpClient> configured = staticClients.find(clientId);
-    if (configured.isPresent()) {
-      return configured;
+    Optional<IdpClient> serviceClient = findServiceClient(clientId);
+    if (serviceClient.isPresent()) {
+      return serviceClient;
     }
     return dynamicClients.find(clientId).map(this::asClient);
   }
 
   /**
-   * Whether this id is a configured service client rather than a commissioned one.
+   * Whether this id is a service client — environment or database — rather than a commissioned one.
    *
-   * <p>The commission endpoints ask, because <b>a commissioned client may not commission</b>: the
-   * ability to mint credentials belongs to the platform's own services, and a credential handed to
-   * a build step or an agent container must not be able to produce more of itself. That is what
-   * keeps the blast radius of a leaked commissioned secret at one context.
+   * <p>The commission endpoints and the service-client management API both ask, because <b>a
+   * commissioned client may not commission or manage service clients</b>: that ability belongs to
+   * the platform's own services, and a credential handed to a build step or an agent container must
+   * not be able to produce more of itself. That is what keeps the blast radius of a leaked
+   * commissioned secret at one context.
    */
-  public boolean isStatic(String clientId) {
-    return staticClients.find(clientId).isPresent();
+  public boolean isServiceClient(String clientId) {
+    return findServiceClient(clientId).isPresent();
   }
 
   /**
@@ -95,52 +117,64 @@ public class ClientRegistry {
     return client;
   }
 
+  /** The environment client, the database client, or both merged — see the class javadoc. */
+  private Optional<IdpClient> findServiceClient(String clientId) {
+    Optional<IdpClient> env = staticClients.find(clientId);
+    Optional<StoredServiceClient> db = serviceClients.find(clientId);
+    if (env.isPresent()) {
+      if (db.isEmpty()) {
+        return env;
+      }
+      return Optional.of(withDatabaseSecret(env.get(), db.get()));
+    }
+    return db.map(ClientRegistry::asServiceClient);
+  }
+
+  /** An environment client that also has a database row: the env roles/claims/audiences, either secret. */
+  private static IdpClient withDatabaseSecret(IdpClient env, StoredServiceClient db) {
+    ClientSecret merged =
+        ClientSecret.either(
+            env.secret(),
+            ClientSecret.serviceClient(
+                null, db.secretHash(), db.previousSecretHash(), db.previousValidUntil()));
+    return new IdpClient(
+        env.clientId(),
+        merged,
+        env.audiences(),
+        env.roles(),
+        env.claims(),
+        env.contextKind(),
+        env.gitRefs(),
+        AudienceSource.ENVIRONMENT);
+  }
+
+  /** A database-only service client: fixed roles and claims in code, the database's secret rule. */
+  private static IdpClient asServiceClient(StoredServiceClient db) {
+    return new IdpClient(
+        db.clientId(),
+        ClientSecret.serviceClient(null, db.secretHash(), db.previousSecretHash(), db.previousValidUntil()),
+        List.of(),
+        DATABASE_SERVICE_CLIENT_ROLES,
+        DATABASE_SERVICE_CLIENT_CLAIMS,
+        null,
+        null,
+        AudienceSource.DATABASE);
+  }
+
   private IdpClient asClient(StoredClient stored) {
-    IdpClient owner = staticClients.find(stored.owner()).orElse(null);
+    IdpClient owner = findServiceClient(stored.owner()).orElse(null);
     return new IdpClient(
         stored.clientId(),
         ClientSecret.stored(stored.secretHash()),
         owner == null ? List.of() : owner.audiences(),
-        rolesFor(owner, stored),
-        claimsFor(owner, stored),
+        // D12: the context kind's fixed role, or none — never the owner's (D3 removed that
+        // inheritance for roles the same way it removed it for claims).
+        CommissionRoles.forKind(stored.contextKind()),
+        // D3: a commission's claims are only what it stated for itself. DynamicClients.toStored has
+        // already run them through CommissionedClaims, so this is the row, verbatim.
+        stored.claims(),
         stored.contextKind(),
-        stored.gitRefs());
-  }
-
-  /**
-   * The roles configured for this commission's kind ({@link CommissionRoles}), else the owner's.
-   *
-   * <p>A configured list is refused when it holds a {@code clients/…} role, exactly like a static
-   * client's: the credential then mints nothing until the line is fixed, the safe direction.
-   */
-  private List<String> rolesFor(IdpClient owner, StoredClient stored) {
-    Optional<List<String>> configured = commissionRoles.forKind(stored.contextKind());
-    if (configured.isPresent()) {
-      ClientRoles.refuseReserved(stored.clientId(), configured.get());
-      return configured.get();
-    }
-    return owner == null ? List.of() : owner.roles();
-  }
-
-  /**
-   * The owner's granted claims, with this commission's own stated over them.
-   *
-   * <p><b>The row wins per name, and only per name.</b> A commission that states {@code project}
-   * replaces the owner's {@code project} and leaves the owner's other grants alone — so scoping one
-   * claim never silently drops another, and a row that states nothing is the plain inheritance this
-   * has always been. The direction is safe because {@link CommissionedClaims} refuses the wildcard:
-   * whatever the row puts here is a concrete value, which every resource service reads as narrower
-   * than both {@code *} and an absent claim.
-   */
-  private static Map<String, String> claimsFor(IdpClient owner, StoredClient stored) {
-    Map<String, String> granted = owner == null ? Map.of() : owner.claims();
-    if (stored.claims().isEmpty()) {
-      return granted;
-    }
-    // LinkedHashMap, like everywhere else claims are built: the token's claim order follows
-    // ClaimNames.GRANTABLE rather than a hash.
-    Map<String, String> merged = new LinkedHashMap<>(granted);
-    merged.putAll(stored.claims());
-    return Collections.unmodifiableMap(merged);
+        stored.gitRefs(),
+        owner == null ? AudienceSource.ENVIRONMENT : owner.audienceSource());
   }
 }

@@ -28,7 +28,15 @@ import java.util.List;
 @ApplicationScoped
 public class BasicCaller {
 
-  public static final String PLATFORM_SYSTEM = "qits-platform:system";
+  /**
+   * The role that gates every machine-admin route here: the open calling model's service-to-service
+   * role (service-client-identity-plan.md, "open calling model" and D5). Named {@code
+   * PLATFORM_SYSTEM} for the constant every call site already used; its VALUE moved from {@code
+   * qits-platform:system} to {@code qits:system} — safe, because every client shipped with both
+   * roles already, and a database service client is minted with both too (until {@code
+   * qits-platform:system} is retired, C8).
+   */
+  public static final String PLATFORM_SYSTEM = "qits:system";
 
   /**
    * The agent role. Every read route here accepts it beside the roles it accepted before: agents
@@ -62,7 +70,7 @@ public class BasicCaller {
    */
   public IdpClient staticOnly(String authorization, String refusal) {
     IdpClient caller = authenticated(authorization);
-    if (!registry.isStatic(caller.clientId())) {
+    if (!registry.isServiceClient(caller.clientId())) {
       throw OAuthException.accessDenied(refusal);
     }
     return caller;

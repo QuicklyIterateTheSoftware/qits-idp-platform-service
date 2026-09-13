@@ -18,10 +18,12 @@ import org.jboss.logging.Logger;
  * {@code @RolesAllowed("clients/prod-qits-projects")} and know the door opens for one caller only.
  * The commissioned credentials get theirs the same way, for free.
  *
- * <p><b>A commissioned client is issued its owner's configured roles, never its owner's
- * self-role.</b> The stamp is made from the id in the token's {@code sub}, so a credential
- * commissioned by qits-projects carries {@code clients/dyn-…} — its own — and cannot reach a door
- * held open for qits-projects itself. That falls out of the mechanism; there is no rule to keep.
+ * <p><b>A commissioned client never carries its owner's self-role, whatever roles it does
+ * carry.</b> The stamp is made from the id in the token's {@code sub}, so a credential commissioned
+ * by qits-projects carries {@code clients/dyn-…} — its own — and cannot reach a door held open for
+ * qits-projects itself. That falls out of the mechanism; there is no rule to keep. (Its other
+ * roles, if any, are its context kind's fixed ones — {@link CommissionRoles} — not a copy of its
+ * owner's configured lines; see {@link ClientRegistry}.)
  *
  * <p><b>So the namespace is reserved.</b> A configured role under {@link #SELF_PREFIX} is refused
  * wherever roles are configured — including a client naming its own, which would be redundant and

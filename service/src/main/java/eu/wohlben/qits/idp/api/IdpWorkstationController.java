@@ -4,6 +4,7 @@ import eu.wohlben.qits.idp.control.Issuer;
 import eu.wohlben.qits.idp.control.PublicClients;
 import eu.wohlben.qits.idp.control.PublicClients.PublicClient;
 import eu.wohlben.qits.idp.control.Sessions;
+import eu.wohlben.qits.idp.control.TokenService;
 import eu.wohlben.qits.idp.control.WorkstationCredentials;
 import eu.wohlben.qits.idp.error.AuthException;
 import eu.wohlben.qits.idp.error.OAuthException;
@@ -115,7 +116,7 @@ public class IdpWorkstationController {
           // got another list would have no way to notice.
           throw OAuthException.invalidRequest("qits-cli does not choose its own audience");
         }
-      } else if (!githostAudience.equals(audience)) {
+      } else if (!isAcceptedWorkstationAudience(audience)) {
         throw OAuthException.invalidRequest("invalid workstation authorization request");
       }
       WorkstationCredentials.requireChallenge(codeChallenge);
@@ -204,6 +205,20 @@ public class IdpWorkstationController {
       @CookieParam(SessionCookie.NAME) String sessionToken,
       @jakarta.ws.rs.PathParam("familyId") UUID familyId) {
     return revokeDevice(sessionToken, familyId);
+  }
+
+  /**
+   * A workstation's {@code audience} parameter, checked against three values it may legitimately
+   * name (C2 of {@code service-client-identity-plan.md}): none at all (the ordinary case: {@code
+   * qits-bootstrap login} does not name one), the old githost value it always accepted, or the
+   * platform-wide one every minted workstation token now also carries. Anything else is refused, as
+   * before.
+   */
+  private boolean isAcceptedWorkstationAudience(String audience) {
+    return audience == null
+        || audience.isBlank()
+        || githostAudience.equals(audience)
+        || TokenService.PLATFORM_AUDIENCE.equals(audience);
   }
 
   private Sessions.Live requireSession(String sessionToken) {

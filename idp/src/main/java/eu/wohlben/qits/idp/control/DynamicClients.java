@@ -41,9 +41,11 @@ import org.jboss.logging.Logger;
  * <p><b>Claims are stored, and that is the per-context scoping the plan declared.</b> A commission
  * may state what its context is about — {@code project=<id>} for a workspace, and the rest of
  * {@link ClaimNames#GRANTABLE} — and those land on the row, narrowing what the credential may act
- * on wherever a resource service reads a claim. Anything it does not state it still inherits from
- * its owner. The rule that bounds it, and the reason there is no "the owner must hold it" check,
- * is in {@link CommissionedClaims}.
+ * on wherever a resource service reads a claim. <b>Anything it does not state, it does not
+ * carry</b>: a commission no longer inherits its owner's claims either (D3 of
+ * {@code service-client-identity-plan.md}), so a row with nothing stated mints a token with no
+ * structured claim at all. The rule that bounds what MAY be stated, and the reason there is no "the
+ * owner must hold it" check, is in {@link CommissionedClaims}.
  */
 @ApplicationScoped
 public class DynamicClients {

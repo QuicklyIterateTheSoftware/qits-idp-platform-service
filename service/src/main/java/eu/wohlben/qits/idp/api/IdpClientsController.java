@@ -50,7 +50,8 @@ import org.jboss.resteasy.reactive.RestResponse;
  * depend on which service is asking. See {@code CommissionedClaims} for why the wildcard is the one
  * value that is not.
  *
- * <p><b>Only a static service client may commission.</b> A commissioned credential authenticates
+ * <p><b>Only a service client may commission</b> — environment or database, never a commissioned
+ * one. A commissioned credential authenticates
  * here (it has to, so a context can hand its own credential back), but {@code POST} refuses it:
  * a credential that could commission more credentials would outlive its own decommission through
  * the ones it made, and the blast radius of a leaked build-step secret would stop being one build.
@@ -258,9 +259,9 @@ public class IdpClientsController {
       @HeaderParam(HttpHeaders.AUTHORIZATION) String authorization,
       @PathParam("clientId") String clientId) {
     IdpClient authenticated = caller.authenticated(authorization);
-    // A credential may always hand itself back. Its roles may be its kind's own
-    // (qits.idp.commission.roles.<kind>, e.g. qits:agent) rather than its owner's, and giving back
-    // one's own credential needs no platform role.
+    // A credential may always hand itself back. Its roles may be its kind's own fixed ones
+    // (CommissionRoles, e.g. qits:agent) rather than its owner's — or none at all — and giving back
+    // one's own credential needs no platform role either way.
     if (!authenticated.clientId().equals(clientId)) {
       caller.requireRole(authenticated, BasicCaller.PLATFORM_SYSTEM);
     }

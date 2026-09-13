@@ -37,6 +37,15 @@ public class TokenService {
 
   private static final Logger LOG = Logger.getLogger(TokenService.class);
 
+  /**
+   * The one platform-wide audience, always allowed and always included (transitional rule, C2 of
+   * {@code service-client-identity-plan.md}). Every token minted here — client credentials,
+   * workstation, and already the CLI's whole list — carries it, so a resource service that has
+   * moved to accepting it (C1 of the same plan, {@code qits.auth.machine.platform-audience}) can
+   * start reading a bearer minted before its own cutover.
+   */
+  public static final String PLATFORM_AUDIENCE = "qits-platform";
+
   /** What a caller gets back, before it is dressed as an RFC 6749 token response. */
   public record IssuedToken(String accessToken, long expiresInSeconds, List<String> audiences) {}
 
@@ -134,11 +143,15 @@ public class TokenService {
   public IssuedToken workstation(UUID userId) {
     Instant now = Instant.now();
     SigningKey key = signingKeys.signing();
+    // The githost audience, plus the platform-wide one (C2 of service-client-identity-plan.md): a
+    // githost that has moved to accepting qits-platform (C1) can read this bearer too, ahead of
+    // any per-service audience change here.
+    List<String> audiences = List.of(workstationGithostAudience, PLATFORM_AUDIENCE);
     JwtClaimsBuilder token =
         Jwt.claims()
             .issuer(issuer.url())
             .subject(userId.toString())
-            .audience(Set.of(workstationGithostAudience))
+            .audience(new LinkedHashSet<>(audiences))
             .groups(Set.of("qits:git:external"))
             .claim("credential_type", "workstation")
             // Both spellings of the same rule: git_ref_pattern for githosts that read only it,
@@ -148,7 +161,7 @@ public class TokenService {
             .issuedAt(now)
             .expiresAt(now.plusSeconds(workstationAccessTokenTtlSeconds));
     String jwt = token.jws().keyId(key.kid()).sign(key.privateKey());
-    return new IssuedToken(jwt, workstationAccessTokenTtlSeconds, List.of(workstationGithostAudience));
+    return new IssuedToken(jwt, workstationAccessTokenTtlSeconds, audiences);
   }
 
   /**
@@ -209,26 +222,48 @@ public class TokenService {
 
   /**
    * The {@code aud} of the token: what was asked for, or the client's whole allowed list when
-   * nothing was asked for.
+   * nothing was asked for — plus {@link #PLATFORM_AUDIENCE}, always (transitional, C2 of
+   * {@code service-client-identity-plan.md}).
+   *
+   * <p><b>A database service client's rule is different, and it is the whole point of the
+   * transition.</b> It has no configured audience list yet, so a requested audience is copied back
+   * <em>unchecked</em> rather than validated against one — {@link IdpClient.AudienceSource#DATABASE}
+   * says so. An environment client (and a commission owned by one) keeps today's rule: a requested
+   * audience must be in its configured list, or be {@link #PLATFORM_AUDIENCE} itself.
+   *
+   * <p><b>An environment client with no configured audience at all is still issued nothing</b> — the
+   * one case {@link #PLATFORM_AUDIENCE} does not rescue. "Always included" widens what a client that
+   * can already ask for something gets; it is not a back door around "no audiences configured",
+   * which is a deployment that has not finished wiring this client up.
    */
   private List<String> resolveAudiences(IdpClient client, List<String> requested) {
+    Set<String> resolved = new LinkedHashSet<>();
+    if (client.audienceSource() == IdpClient.AudienceSource.DATABASE) {
+      resolved.addAll(requested);
+      resolved.add(PLATFORM_AUDIENCE);
+      return List.copyOf(resolved);
+    }
     List<String> allowed = client.audiences();
     if (allowed.isEmpty()) {
-      LOG.warnf("token request refused for client %s: no audiences configured", LoggableClientId.of(client.clientId()));
+      LOG.warnf(
+          "token request refused for client %s: no audiences configured",
+          LoggableClientId.of(client.clientId()));
       throw OAuthException.invalidTarget("this client may request no audience");
     }
     if (requested.isEmpty()) {
-      return allowed;
-    }
-    Set<String> resolved = new LinkedHashSet<>();
-    for (String audience : requested) {
-      if (!allowed.contains(audience)) {
-        LOG.warnf(
-            "token request refused for client %s: audience not allowed", LoggableClientId.of(client.clientId()));
-        throw OAuthException.invalidTarget("audience is not allowed for this client");
+      resolved.addAll(allowed);
+    } else {
+      for (String audience : requested) {
+        if (!allowed.contains(audience) && !PLATFORM_AUDIENCE.equals(audience)) {
+          LOG.warnf(
+              "token request refused for client %s: audience not allowed",
+              LoggableClientId.of(client.clientId()));
+          throw OAuthException.invalidTarget("audience is not allowed for this client");
+        }
+        resolved.add(audience);
       }
-      resolved.add(audience);
     }
+    resolved.add(PLATFORM_AUDIENCE);
     return List.copyOf(resolved);
   }
 }
