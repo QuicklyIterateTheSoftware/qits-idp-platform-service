@@ -61,8 +61,11 @@ reasoning is in `service/src/main/resources/application.properties`, the proof i
 same commit.
 
 A token request authenticates with `client_secret_basic` **or** `client_secret_post`, never both,
-and may name an `audience` (repeated or whitespace-separated). Naming none asks for every audience
-the client is allowed.
+and may name an `audience` (repeated or whitespace-separated). Each one named is still checked — it
+must be on the client's list, or it must be `qits-platform` — but **for an environment client (or a
+commission owned by one) naming an audience no longer narrows what comes back**: `aud` is always the
+client's whole allowed list, plus `qits-platform`, whatever was asked for. See the explanation below
+the claim table for why.
 
     curl -s -X POST http://qits-platform-idp:8080/idp/token \
       -d grant_type=client_credentials \
@@ -75,12 +78,32 @@ The token is RS256, carries a `kid`, and says:
 |---|---|
 | `iss` | `qits.idp.issuer` |
 | `sub` | the client id |
-| `aud` | the resolved audiences, always a JSON array, **always including `qits-platform`** — transitional, service-client-identity-plan.md C2 |
+| `aud` | always a JSON array, always including `qits-platform` — see below |
 | `iat`, `exp`, `jti` | issued now, valid for `qits.idp.token-ttl-seconds` (3600 by default) |
 | `groups` | the client's configured roles, **plus `clients/<client id>`** — see below |
 | `project`, `workspace`, `branch` | only when granted to the client, copied verbatim |
 | `context_kind` | commissioned clients only: the commission's `contextKind` |
 | `git_refs` | commissioned clients only, and only when the commission stated a list — see [Git refs](#git-refs) |
+
+**`aud`, for an environment client (or a commission owned by one), is always the client's whole
+allowed list, plus `qits-platform` — never only what was asked for.** A named audience is still
+checked — it must be on the list, or be `qits-platform` itself, or the request is refused with
+`invalid_target` as before — but a narrower request no longer narrows the answer.
+
+This is about the rollout, not about security. A service that switches to the one named `qits` OIDC
+client asks for a single audience, `qits-platform`. Some of the services it calls will not yet have
+taken the qits-auth-core release that accepts `qits-platform` (contract C1, carried in by the
+ordinary maintenance bump train — which can land as late as the next nightly run) — they still read
+their own name off the token, the same as always. Putting the whole list on every token, regardless
+of what was asked for, means the calling service does not have to wait for every one of its
+receivers to have taken that bump first. Under the open calling model this costs nothing: `aud` only
+says where a token may be *presented*, never what it may do there, so an audience a token did not
+need to carry grants it nothing extra. A later phase (C7) narrows every token back down to
+`qits-platform` alone, once every receiver has moved.
+
+A **database service client** keeps the other rule: it has no configured audience list yet, so a
+requested audience is copied back *unchecked* — never validated, and never widened to a "whole list"
+that does not exist for it.
 
 **Every client token names its own client.** `groups` — which `quarkus-oidc` reads as roles — always
 ends with `clients/<the id in `sub`>`, stamped at mint time and configured nowhere. A role naming one

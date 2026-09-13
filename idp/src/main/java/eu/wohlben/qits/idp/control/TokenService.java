@@ -221,15 +221,30 @@ public class TokenService {
   }
 
   /**
-   * The {@code aud} of the token: what was asked for, or the client's whole allowed list when
-   * nothing was asked for — plus {@link #PLATFORM_AUDIENCE}, always (transitional, C2 of
-   * {@code service-client-identity-plan.md}).
+   * The {@code aud} of the token (transitional, C2 of {@code service-client-identity-plan.md}).
    *
-   * <p><b>A database service client's rule is different, and it is the whole point of the
-   * transition.</b> It has no configured audience list yet, so a requested audience is copied back
-   * <em>unchecked</em> rather than validated against one — {@link IdpClient.AudienceSource#DATABASE}
-   * says so. An environment client (and a commission owned by one) keeps today's rule: a requested
-   * audience must be in its configured list, or be {@link #PLATFORM_AUDIENCE} itself.
+   * <p><b>An environment client (and a commission owned by one) always gets its WHOLE allowed list,
+   * plus {@link #PLATFORM_AUDIENCE} — never only what was asked for.</b> A requested audience is
+   * still checked: each one named must be in the client's configured list or be {@link
+   * #PLATFORM_AUDIENCE} itself, or the request is refused with {@code invalid_target} exactly as
+   * before. What changed is that a narrower request no longer narrows the token it gets back.
+   *
+   * <p>The reason is the rollout, not the security model. A service moving to the one named {@code
+   * qits} OIDC client asks for a single audience, {@code qits-platform}. A receiver that has not yet
+   * taken the qits-auth-core release that accepts {@code qits-platform} (C1, carried in by the
+   * ordinary maintenance bump train — which can be as late as the next nightly run) still needs to
+   * find its OWN audience on the token, or it refuses a caller that is otherwise entitled to call it.
+   * Putting the whole list on every token, regardless of what was asked for, means the caller does
+   * not have to wait for every one of its receivers to have taken that bump first. Under the open
+   * calling model an over-addressed token grants nothing beyond what the caller's roles already
+   * allow — {@code aud} only says where a token may be PRESENTED, not what it may do there — so the
+   * widening costs nothing. C7 narrows every token back down to {@code qits-platform} alone, once
+   * every receiver has moved.
+   *
+   * <p><b>A database service client keeps the other rule</b>: it has no configured audience list
+   * yet, so a requested audience is copied back <em>unchecked</em> rather than checked against one —
+   * {@link IdpClient.AudienceSource#DATABASE} says so — and only what was requested (plus {@link
+   * #PLATFORM_AUDIENCE}) comes back, not a "whole list" that does not exist for it.
    *
    * <p><b>An environment client with no configured audience at all is still issued nothing</b> — the
    * one case {@link #PLATFORM_AUDIENCE} does not rescue. "Always included" widens what a client that
@@ -237,9 +252,8 @@ public class TokenService {
    * which is a deployment that has not finished wiring this client up.
    */
   private List<String> resolveAudiences(IdpClient client, List<String> requested) {
-    Set<String> resolved = new LinkedHashSet<>();
     if (client.audienceSource() == IdpClient.AudienceSource.DATABASE) {
-      resolved.addAll(requested);
+      Set<String> resolved = new LinkedHashSet<>(requested);
       resolved.add(PLATFORM_AUDIENCE);
       return List.copyOf(resolved);
     }
@@ -250,19 +264,18 @@ public class TokenService {
           LoggableClientId.of(client.clientId()));
       throw OAuthException.invalidTarget("this client may request no audience");
     }
-    if (requested.isEmpty()) {
-      resolved.addAll(allowed);
-    } else {
-      for (String audience : requested) {
-        if (!allowed.contains(audience) && !PLATFORM_AUDIENCE.equals(audience)) {
-          LOG.warnf(
-              "token request refused for client %s: audience not allowed",
-              LoggableClientId.of(client.clientId()));
-          throw OAuthException.invalidTarget("audience is not allowed for this client");
-        }
-        resolved.add(audience);
+    // Every requested audience is still checked — narrowing the REQUEST is still refused when it
+    // asks for something the client may not have. Narrowing the ANSWER is what stopped: a valid
+    // request, however small, gets the whole list back.
+    for (String audience : requested) {
+      if (!allowed.contains(audience) && !PLATFORM_AUDIENCE.equals(audience)) {
+        LOG.warnf(
+            "token request refused for client %s: audience not allowed",
+            LoggableClientId.of(client.clientId()));
+        throw OAuthException.invalidTarget("audience is not allowed for this client");
       }
     }
+    Set<String> resolved = new LinkedHashSet<>(allowed);
     resolved.add(PLATFORM_AUDIENCE);
     return List.copyOf(resolved);
   }

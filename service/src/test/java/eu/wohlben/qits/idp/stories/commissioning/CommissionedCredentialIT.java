@@ -226,10 +226,18 @@ public class CommissionedCredentialIT {
     assertEquals(
         clientId, claims.getSubject(), "sub is the commissioned id, never the owner's");
     assertEquals(
-        List.of(StoryTarget.ARTIFACTS_AUDIENCE, "qits-platform"),
+        List.of(
+            StoryTarget.CI,
+            StoryTarget.ARTIFACTS_AUDIENCE,
+            StoryTarget.WORKSPACES,
+            StoryTarget.DEPLOYMENTS_AUDIENCE,
+            "prod-qits-githost",
+            "qits-platform"),
         PublishedJwks.audienceOf(claims),
-        "aud is exactly what was asked for, out of the OWNER's shipped list — plus qits-platform,"
-            + " which rides along transitionally (service-client-identity-plan.md, C2)");
+        "aud is the OWNER's WHOLE shipped list, not narrowed to the one audience that was asked"
+            + " for, plus qits-platform — both transitional (service-client-identity-plan.md, C2):"
+            + " a receiver that has not yet taken the qits-auth-core release accepting"
+            + " qits-platform still finds its own name on the token");
     List<String> groups = claims.getStringListClaimValue("groups");
     assertEquals(
         List.of(StoryTarget.selfRoleOf(clientId)),

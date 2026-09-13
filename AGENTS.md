@@ -168,8 +168,20 @@ through `/idp/api/service-clients` (`IdpServiceClientsController`). Four things 
 - **Roles, claims and the audience rule are code for a database service client** (D3): `groups` is
   `qits:system` plus its own `clients/<id>` (and `qits-platform:system`, until C8), the claim is
   `project=*`, and `aud` copies a requested audience back **unchecked** — there is no configured
-  list to check it against — plus `qits-platform`, always. An environment client's rule is
-  unchanged; only `qits-platform` riding along on top of it is new.
+  list to check it against — plus `qits-platform`, always.
+- **An environment client's `aud` is its WHOLE allowed list, plus `qits-platform`, whatever was
+  asked for.** `TokenService.resolveAudiences` still checks every requested audience against the
+  client's configured list (or against `qits-platform` itself) and still refuses with
+  `invalid_target` when one is not on it — a request can still be too wide, it just cannot be
+  narrower than the answer any more. **Why**: a service moving to the one named `qits` client asks
+  for one audience, `qits-platform`; a receiver that has not yet taken the qits-auth-core release
+  accepting it (C1, carried by the bump train — possibly not until the next nightly run) still
+  needs its own name on the token, or it refuses a caller it should accept. Handing back the whole
+  list on every request means the caller does not have to wait for every receiver's bump. Under the
+  open calling model this is free: `aud` says only where a token may be presented, never what it may
+  do there, so an audience the caller did not ask for grants nothing extra. C7 narrows every token
+  to `qits-platform` alone, once every receiver has moved. A database client keeps the narrower,
+  unchecked rule above — there is no "whole list" for it to widen to.
 - **`QITS_IDP_SEED_CLIENT_ID`/`_SECRET` seed the very first row, once** — nothing can call the
   management API before any service client exists to authenticate with. The `idp_seed` marker row
   is what "once" checks, not the variables: `ServiceClients.seedOnce` reads the marker before it

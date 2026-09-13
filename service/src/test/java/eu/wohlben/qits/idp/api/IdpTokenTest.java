@@ -34,7 +34,12 @@ import org.junit.jupiter.api.Test;
 public class IdpTokenTest {
 
   @Test
-  public void aClientGetsAVerifiableTokenForTheAudienceItAsksFor() throws Exception {
+  public void requestingOneListedAudienceStillReturnsTheWholeAllowedList() throws Exception {
+    // An environment client's aud is its whole allowed list plus qits-platform, whatever it asked
+    // for — a request still narrows what it names, only the ANSWER stopped narrowing
+    // (service-client-identity-plan.md, C2). test-broad's allowed list is
+    // [prod-qits-ci, qits-deployments]; asking for one of the two still gets both, plus the
+    // platform audience.
     String token =
         post("grant_type=client_credentials"
                 + "&client_id=test-broad"
@@ -54,8 +59,10 @@ public class IdpTokenTest {
     JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
     assertEquals("test-broad", claims.getSubject());
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer());
-    // qits-platform rides along on every token, transitionally (service-client-identity-plan.md, C2).
-    assertEquals(List.of("qits-deployments", "qits-platform"), PublishedJwks.audienceOf(claims));
+    assertEquals(
+        List.of("prod-qits-ci", "qits-deployments", "qits-platform"),
+        PublishedJwks.audienceOf(claims),
+        "the whole allowed list, plus qits-platform — not narrowed to what was asked for");
     // The configured roles, then the self-role this service stamps. The whole claim is pinned
     // rather than searched: `groups` is the token's shape, and a change to it is a change every
     // consumer reads.
@@ -69,6 +76,24 @@ public class IdpTokenTest {
         "exp must be iat plus the configured lifetime");
     assertNotNull(
         PublishedJwks.kidOf(token), "every token carries a kid, or rotation is a flag day");
+  }
+
+  @Test
+  public void requestingOnlyThePlatformAudienceStillReturnsTheWholeAllowedList() throws Exception {
+    // A service switching to the one qits client asks only for qits-platform. It still gets its
+    // whole allowed list back, so a receiver that has not yet taken the qits-auth-core release that
+    // accepts qits-platform (C1) still finds its own audience on the token.
+    String token =
+        post("grant_type=client_credentials"
+                + "&client_id=test-narrow"
+                + "&client_secret=test-narrow-secret"
+                + "&audience=qits-platform")
+            .statusCode(200)
+            .extract()
+            .path("access_token");
+
+    JwtClaims claims = PublishedJwks.verify(token, "qits-deployments");
+    assertEquals(List.of("qits-deployments", "qits-platform"), PublishedJwks.audienceOf(claims));
   }
 
   @Test

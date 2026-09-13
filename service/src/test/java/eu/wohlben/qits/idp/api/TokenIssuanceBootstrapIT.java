@@ -243,11 +243,18 @@ public class TokenIssuanceBootstrapIT {
     assertEquals(PublishedJwks.ISSUER, claims.getIssuer(), "iss is the configured issuer");
     assertEquals(CLIENT, claims.getSubject(), "sub is the client that authenticated");
     assertEquals(
-        List.of(AUDIENCE, "qits-platform"),
+        List.of(
+            StoryTarget.CI,
+            StoryTarget.ARTIFACTS_AUDIENCE,
+            StoryTarget.WORKSPACES,
+            AUDIENCE,
+            "prod-qits-githost",
+            "qits-platform"),
         PublishedJwks.audienceOf(claims),
-        "aud is exactly the audience that was asked for, never the whole allowed list — plus"
-            + " qits-platform, which rides along on every token transitionally"
-            + " (service-client-identity-plan.md, C2)");
+        "aud is the client's WHOLE shipped list, not narrowed to the one audience that was"
+            + " asked for, plus qits-platform — both transitional (service-client-identity-plan.md,"
+            + " C2): a receiver that has not yet taken the qits-auth-core release accepting"
+            + " qits-platform still finds its own name on the token");
     // The claim pinned whole rather than searched: `groups` is the token's shape, and a change to
     // it is a change every consumer reads. The two system roles are this client's SHIPPED lines;
     // the third is the self-role the idp mints from the id that authenticated and grants nowhere,
@@ -265,10 +272,9 @@ public class TokenIssuanceBootstrapIT {
         .note(
             "the bearer says who the caller is (sub="
                 + CLIENT
-                + "), what it may be presented to (aud="
-                + AUDIENCE
-                + " plus qits-platform, which rides along transitionally) and what it is (groups ="
-                + " the configured system roles plus clients/"
+                + "), what it may be presented to (aud=the client's whole shipped list plus"
+                + " qits-platform, not narrowed to the one audience asked for — both transitional)"
+                + " and what it is (groups = the configured system roles plus clients/"
                 + CLIENT
                 + ", the self-role this service stamps and nobody can be granted)")
         .as("bearer-answered");
