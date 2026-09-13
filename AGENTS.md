@@ -109,28 +109,73 @@ and by nothing else:**
 
 **The `clients/` role namespace is minted, never granted.** Every `client_credentials` token's
 `groups` ends with `clients/<the id in sub>` (`ClientRoles`, called from `TokenService`), and a
-configured `roles` line under that prefix is refused where the roles are read (`IdpClients.find`,
-400 `invalid_request`) — for another client's id and for the client's own alike. One guard covers
-every surface because every surface resolves a client through that one lookup: the token endpoint,
-the Basic-authenticated machine APIs, and a commissioned credential inheriting its owner's roles.
-A new place that accepts roles from anywhere else has to call `refuseReserved` itself, and a new
-mint that is not to a client credential must not stamp one — `TokenService.workstation` is the
+configured `roles` line under that prefix is refused where an environment client's roles are read
+(`IdpClients.find`, 400 `invalid_request`) — for another client's id and for the client's own
+alike. A new place that accepts roles from anywhere else has to call `refuseReserved` itself, and a
+new mint that is not to a client credential must not stamp one — `TokenService.workstation` is the
 standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is what all of it is for.
-The roles per commission kind (`qits.idp.commission.roles.<kind>`, `CommissionRoles`) are such a
-place: `ClientRegistry.rolesFor` calls `refuseReserved` on them. The jar ships lines for
-`workspace`, `agent-container`, `refinement` (`qits:agent`) and `ci-run` (`qits:ci-run`); the suite
-tests them as shipped, so a change to those lines is a change to `CommissionedGitRefsTest`.
+
+**A commissioned credential's roles are code, not a merge with its owner's**
+(`service-client-identity-plan.md`, D3/D12). `CommissionRoles.forKind` is a plain, unconfigured
+`Map<String, List<String>>`: `workspace`, `agent-container`, `refinement` (`qits:agent`) and
+`ci-run` (`qits:ci-run`) are the four the jar ships, tested as shipped in
+`CommissionedGitRefsTest` — a change to that map is a change there. **A kind not in the map gets no
+role at all**, not a refusal (D12) — only its own self-role, so a test class is free to invent a
+kind without a config line to write for it. There used to be a `qits.idp.commission.roles.<kind>`
+config key that let a deployment override this; it is gone, along with the owner-role fallback it
+replaced — `ClientRegistry.asClient` calls `CommissionRoles.forKind` directly and reads no config.
+Claims followed the same change: a commission's claims are only what it stated for itself, never
+merged with its owner's grants.
 
 **Every read route accepts `qits:agent`; no write route does** (user ruling 2026-09-12: agents keep
 every read and lose only write access). Today the one read route with a role check is `GET
 /api/clients` (`BasicCaller.requireAnyRole`); the others are public or session-based. A new read
-route with a role check accepts `BasicCaller.AGENT` too; a new write route does not.
+route with a role check accepts `BasicCaller.AGENT` too; a new write route does not. **The
+service-client management API (`/api/service-clients`) is the one deliberate exception**: every
+verb there, GET included, requires `qits:system` and refuses `qits:agent` — migrating a service's
+own secret is not a thing an agent's context has any business doing, so `IdpServiceClientsController`
+calls `BasicCaller.staticOnly` rather than `requireAnyRole` throughout.
+
+**`BasicCaller.PLATFORM_SYSTEM`'s VALUE is `qits:system`, not `qits-platform:system`**, since C2 of
+the plan (the constant kept its name — every call site already reads `BasicCaller.PLATFORM_SYSTEM`
+— only what it equals moved). Safe, because every shipped environment client's `roles` line and
+every database service client's fixed roles carry `qits:system` too.
 
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
 identity to whoever asks. `IdpTokenTest.aClientWithNoSecretIsUnusableRatherThanOpen` runs against
 `prod-qits-workspaces` — a *shipped* client with no secret — rather than a fixture, so the test pins
 the real default.
+
+**Service clients are moving into the database, one repository at a time**
+(`service-client-identity-plan.md`, contract C2). `ServiceClients` (`idp/control`) is the new half
+of the registry, `idp_service_client` rows rather than `qits.idp.client.<id>.*` config, managed
+through `/idp/api/service-clients` (`IdpServiceClientsController`). Four things to keep straight:
+
+- **It loads at start into a volatile map, exactly like `SigningKeys`' key set** — `onStart` runs
+  after Flyway and either finds the seed already done or does it, then loads every row. The token
+  path stays off postgres for a database service client the same way it already did for an
+  environment one: `ServiceClients.find` is a map read, never a query. Every write —
+  `create`/`rotate`/`delete`/the one-time seed — goes through `DbRetry` and replaces the map under a
+  `synchronized` method, the same one-idp-process assumption `DynamicClients` already documents.
+- **Dual source, for as long as a cutover takes.** `ClientRegistry` resolves an id against
+  `IdpClients` (environment) first, same as always; if a database row *also* exists for that id,
+  `ClientSecret.either` merges the environment secret with the database's current and unexpired
+  previous hash, so either authenticates, while the environment entry keeps deciding roles, claims
+  and the audience rule. An id with only a database row gets `ClientRegistry.asServiceClient`'s
+  code-fixed shape instead. `IdpClient.AudienceSource` is the flag `TokenService.resolveAudiences`
+  branches on; a commissioned client inherits its owner's source, never picks its own.
+- **Roles, claims and the audience rule are code for a database service client** (D3): `groups` is
+  `qits:system` plus its own `clients/<id>` (and `qits-platform:system`, until C8), the claim is
+  `project=*`, and `aud` copies a requested audience back **unchecked** — there is no configured
+  list to check it against — plus `qits-platform`, always. An environment client's rule is
+  unchanged; only `qits-platform` riding along on top of it is new.
+- **`QITS_IDP_SEED_CLIENT_ID`/`_SECRET` seed the very first row, once** — nothing can call the
+  management API before any service client exists to authenticate with. The `idp_seed` marker row
+  is what "once" checks, not the variables: `ServiceClients.seedOnce` reads the marker before it
+  reads the variables, so a later boot with them still set, changed, or blanked does nothing.
+  `ServiceClientSeedTest` proves that by calling `seedOnce()` again directly (package-visible for
+  exactly this) rather than by actually rebooting the process.
 
 ## Package and module conventions
 
@@ -241,7 +286,10 @@ characters are refused; beyond that and the column's length the name is the user
 
 `idp/src/main/resources/db/idp/migration/`, hand-written, its own lineage on its own datasource —
 keep appending, never edit an applied migration. V1 is the keys and an empty client table, V2 fills
-the client table in, V3 is the five user tables.
+the client table in, V3 is the five user tables. **V8 is `idp_service_client` and `idp_seed`**
+(contract C2 of `service-client-identity-plan.md`): a new table rather than a kind column on
+`idp_client`, because a service client has no owner and no context — see `ServiceClients` and
+`V8SchemaTest`.
 
 **One column set in V3 is not a design and must not be treated as one.** `idp_webauthn_credential`
 is exactly `WebAuthnCredentialRecord.RequiredPersistedData` from quarkus-security-webauthn, read off
