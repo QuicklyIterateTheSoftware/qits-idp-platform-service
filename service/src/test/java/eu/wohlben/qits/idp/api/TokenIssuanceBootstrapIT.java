@@ -166,7 +166,7 @@ public class TokenIssuanceBootstrapIT {
       its deployment gave it and asks for the one audience it means to call.
 
       What comes back is a bearer that says who the caller is (`sub`), what it may be presented
-      to (`aud`) and what it is (`groups` — the configured system roles plus `clients/<its own
+      to (`aud`) and what it is (`groups` — the configured system role plus `clients/<its own
       id>`, which the idp stamps and nobody can be granted). And the key that signed it is on the
       published JWKS, under the `kid` the token names: the token and the document a consumer
       fetches are the two ends of one key, which is the whole of why offline validation works.
@@ -256,12 +256,12 @@ public class TokenIssuanceBootstrapIT {
             + " C2): a receiver that has not yet taken the qits-auth-core release accepting"
             + " qits-platform still finds its own name on the token");
     // The claim pinned whole rather than searched: `groups` is the token's shape, and a change to
-    // it is a change every consumer reads. The two system roles are this client's SHIPPED lines;
-    // the third is the self-role the idp mints from the id that authenticated and grants nowhere,
+    // it is a change every consumer reads. The system role is this client's SHIPPED line; the
+    // second is the self-role the idp mints from the id that authenticated and grants nowhere,
     // which is what lets a resource service write @RolesAllowed("clients/prod-qits-ci") and know
     // exactly one caller can reach the door.
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + CLIENT),
+        List.of("qits:system", "clients/" + CLIENT),
         claims.getStringListClaimValue("groups"),
         "the configured roles, then the self-role this service stamps");
     // The ANSWER is not an edge of its own. Direction on a diagram is who initiated, and nobody
@@ -274,7 +274,7 @@ public class TokenIssuanceBootstrapIT {
                 + CLIENT
                 + "), what it may be presented to (aud=the client's whole shipped list plus"
                 + " qits-platform, not narrowed to the one audience asked for — both transitional)"
-                + " and what it is (groups = the configured system roles plus clients/"
+                + " and what it is (groups = the configured system role plus clients/"
                 + CLIENT
                 + ", the self-role this service stamps and nobody can be granted)")
         .as("bearer-answered");

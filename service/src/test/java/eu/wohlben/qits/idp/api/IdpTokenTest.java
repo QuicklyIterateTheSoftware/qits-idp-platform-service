@@ -67,7 +67,7 @@ public class IdpTokenTest {
     // rather than searched: `groups` is the token's shape, and a change to it is a change every
     // consumer reads.
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/test-broad"),
+        List.of("qits:system", "clients/test-broad"),
         claims.getStringListClaimValue("groups"));
     assertNotNull(claims.getIssuedAt(), "iat");
     assertEquals(

@@ -140,11 +140,9 @@ public final class StoryTarget {
   /** On nobody's shipped list. Asking for it is the {@code invalid_target} refusal. */
   public static final String UNENTITLED_AUDIENCE = "prod-qits-observability";
 
-  // --- the two coarse machine roles every shipped client carries ---------------------------------
+  // --- the coarse machine role every shipped client carries --------------------------------------
 
   public static final String SYSTEM_ROLE = "qits:system";
-
-  public static final String PLATFORM_SYSTEM_ROLE = "qits-platform:system";
 
   /** The reserved namespace: minted from the id that authenticated, granted nowhere. */
   public static String selfRoleOf(String clientId) {

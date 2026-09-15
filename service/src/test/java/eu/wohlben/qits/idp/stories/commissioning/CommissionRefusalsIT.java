@@ -183,7 +183,7 @@ public class CommissionRefusalsIT {
         .body("find { it.contextId == '" + CONTEXT_ID + "' }", nullValue());
     story
         .note(
-            "another platform service — authenticated, and carrying the same qits-platform:system"
+            "another platform service — authenticated, and carrying the same qits:system"
                 + " role — gets 404 for a credential it does not own, the SAME answer as an id that"
                 + " never existed, so nobody maps which services hold which contexts by probing"
                 + " here. And its listing is its own: there is no listing across owners")

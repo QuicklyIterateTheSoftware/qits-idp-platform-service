@@ -55,13 +55,12 @@ public class ClientRegistry {
   private static final Logger LOG = Logger.getLogger(ClientRegistry.class);
 
   /**
-   * A database service client's fixed roles (D3 of the plan): {@code qits:system} for the open
-   * calling model, plus {@code qits-platform:system} until C8 retires it. {@code "qits:system"} is
-   * spelled here rather than read from {@code BasicCaller.PLATFORM_SYSTEM}: this module has no
-   * compile-time dependency on {@code service} ("Adding a dependency on another context").
+   * A database service client's fixed roles (D3 of the plan): {@code qits:system}, the open calling
+   * model's service-to-service role. It is spelled here rather than read from {@code
+   * BasicCaller.PLATFORM_SYSTEM}: this module has no compile-time dependency on {@code service}
+   * ("Adding a dependency on another context").
    */
-  private static final List<String> DATABASE_SERVICE_CLIENT_ROLES =
-      List.of("qits:system", "qits-platform:system");
+  private static final List<String> DATABASE_SERVICE_CLIENT_ROLES = List.of("qits:system");
 
   /** A database service client's one fixed claim (D3): it serves every project. */
   private static final Map<String, String> DATABASE_SERVICE_CLIENT_CLAIMS =

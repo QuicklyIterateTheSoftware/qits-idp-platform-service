@@ -369,7 +369,7 @@ public class CommissionedGitRefsTest {
   @Test
   public void aStaticClientsRolesAreUnchanged() throws Exception {
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + OWNER),
+        List.of("qits:system", "clients/" + OWNER),
         claimsOf(OWNER, OWNER_SECRET).getStringListClaimValue("groups"));
   }
 

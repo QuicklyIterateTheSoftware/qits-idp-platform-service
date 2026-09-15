@@ -30,11 +30,9 @@ public class BasicCaller {
 
   /**
    * The role that gates every machine-admin route here: the open calling model's service-to-service
-   * role (service-client-identity-plan.md, "open calling model" and D5). Named {@code
-   * PLATFORM_SYSTEM} for the constant every call site already used; its VALUE moved from {@code
-   * qits-platform:system} to {@code qits:system} — safe, because every client shipped with both
-   * roles already, and a database service client is minted with both too (until {@code
-   * qits-platform:system} is retired, C8).
+   * role (service-client-identity-plan.md, "open calling model" and D5). Every shipped environment
+   * client's {@code roles} line carries it, and a database service client is minted with it in code
+   * ({@code ClientRegistry}), so it is the one role that gates a machine-admin route here.
    */
   public static final String PLATFORM_SYSTEM = "qits:system";
 

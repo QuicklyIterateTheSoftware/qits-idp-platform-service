@@ -146,9 +146,7 @@ public class ReservedRoleNamespaceIT {
     List<String> groups = claims.getStringListClaimValue("groups");
     assertEquals(
         List.of(
-            StoryTarget.SYSTEM_ROLE,
-            StoryTarget.PLATFORM_SYSTEM_ROLE,
-            StoryTarget.selfRoleOf(StoryTarget.CI)),
+            StoryTarget.SYSTEM_ROLE, StoryTarget.selfRoleOf(StoryTarget.CI)),
         groups,
         "the configured roles, then the self-role stamped from the id in sub");
     assertFalse(

@@ -221,8 +221,8 @@ The id rule (400 otherwise) is the same shape a wire alias already has: `[a-z][a
 never a commissioned id (`dyn-…`) and never the workstation's or the CLI's public client id.
 
 **A database service client's roles, claims and audience rule are code, never configuration**
-(D3): `groups` is `qits:system` plus its own `clients/<id>` (and `qits-platform:system`, until it
-is retired); the claim `project=*`, because the open calling model has it serve every project; and
+(D3): `groups` is `qits:system` plus its own `clients/<id>`; the claim `project=*`, because the
+open calling model has it serve every project; and
 its `aud` copies a requested audience back unchecked rather than checking it against a configured
 list — there is no list yet — plus `qits-platform`, always. An environment service client is
 unchanged: today's config, today's rule, until it is migrated here.

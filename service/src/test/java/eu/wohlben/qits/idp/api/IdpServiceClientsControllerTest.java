@@ -244,7 +244,7 @@ public class IdpServiceClientsControllerTest {
     // platform-wide one, always (service-client-identity-plan.md, C2).
     assertEquals(List.of("some-service", "qits-platform"), claims.getAudience());
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/" + id),
+        List.of("qits:system", "clients/" + id),
         claims.getStringListClaimValue("groups"));
     assertEquals("*", claims.getClaimValueAsString("project"), "D3: every project, in code");
     assertFalse(claims.hasClaim("workspace"));

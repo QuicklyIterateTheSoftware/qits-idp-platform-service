@@ -136,10 +136,10 @@ verb there, GET included, requires `qits:system` and refuses `qits:agent` — mi
 own secret is not a thing an agent's context has any business doing, so `IdpServiceClientsController`
 calls `BasicCaller.staticOnly` rather than `requireAnyRole` throughout.
 
-**`BasicCaller.PLATFORM_SYSTEM`'s VALUE is `qits:system`, not `qits-platform:system`**, since C2 of
-the plan (the constant kept its name — every call site already reads `BasicCaller.PLATFORM_SYSTEM`
-— only what it equals moved). Safe, because every shipped environment client's `roles` line and
-every database service client's fixed roles carry `qits:system` too.
+**`BasicCaller.PLATFORM_SYSTEM`'s VALUE is `qits:system`** — the open calling model's one
+service-to-service role, which is what every shipped environment client's `roles` line carries and
+what a database service client's fixed roles are. The constant's name is the seam it gates (the
+platform's system surfaces), not the spelling of the role; every call site reads the constant.
 
 **Never make the safe direction configurable.** A client with a blank secret is unusable. There is
 no flag that turns that into "open", and adding one would make an unconfigured deployment issue
@@ -166,7 +166,7 @@ through `/idp/api/service-clients` (`IdpServiceClientsController`). Four things 
   code-fixed shape instead. `IdpClient.AudienceSource` is the flag `TokenService.resolveAudiences`
   branches on; a commissioned client inherits its owner's source, never picks its own.
 - **Roles, claims and the audience rule are code for a database service client** (D3): `groups` is
-  `qits:system` plus its own `clients/<id>` (and `qits-platform:system`, until C8), the claim is
+  `qits:system` plus its own `clients/<id>`, the claim is
   `project=*`, and `aud` copies a requested audience back **unchecked** — there is no configured
   list to check it against — plus `qits-platform`, always.
 - **An environment client's `aud` is its WHOLE allowed list, plus `qits-platform`, whatever was

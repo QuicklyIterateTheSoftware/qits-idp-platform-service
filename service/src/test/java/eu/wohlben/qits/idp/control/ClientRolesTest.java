@@ -21,8 +21,8 @@ public class ClientRolesTest {
   @Test
   public void aMintedTokenCarriesTheConfiguredRolesThenTheClientsOwn() {
     assertEquals(
-        List.of("qits:system", "qits-platform:system", "clients/prod-qits-projects"),
-        List.copyOf(ClientRoles.mintedFor(client("prod-qits-projects", "qits:system", "qits-platform:system"))));
+        List.of("qits:system", "qits:admin", "clients/prod-qits-projects"),
+        List.copyOf(ClientRoles.mintedFor(client("prod-qits-projects", "qits:system", "qits:admin"))));
   }
 
   @Test
@@ -64,7 +64,7 @@ public class ClientRolesTest {
 
   @Test
   public void anOrdinaryRoleIsNotRefused() {
-    ClientRoles.refuseReserved("prod-qits-ci", List.of("qits:system", "qits-platform:system"));
+    ClientRoles.refuseReserved("prod-qits-ci", List.of("qits:system", "qits:admin"));
     ClientRoles.refuseReserved("prod-qits-ci", List.of());
     ClientRoles.refuseReserved("prod-qits-ci", null);
     // The prefix is the whole of the rule — a role that merely mentions it is somebody else's.
