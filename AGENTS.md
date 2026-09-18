@@ -445,8 +445,10 @@ The **story catalogue** — `service/src/test/java/eu/wohlben/qits/idp/stories/*
 `api/TokenIssuanceBootstrapIT`, which predates the package and stayed where it is because its name
 is a cross-repo landmark. Seven `@UserStory` methods in six `@QuarkusIntegrationTest` classes,
 emitting `service/target/userstories/<category>/<story>/` — sidecar, markdown, HTML — which the
-non-gating second step of `.config/qits/ci-event-release-request.yml` tars and publishes as
-`@userflows/qits-platform-idp`, once per release-request fold. The
+second step of the release-request phase tars and publishes as `@userflows/qits-idp-platform-service`
+(`.config/qits/release.yml` declares the `java-service` archetype and `userflows: true`, and `true`
+means this repository's own name), once per release-request fold. That step **gates**, like every
+step of the composed pipeline: a red story is a red verdict for the whole fold. The
 framework is `eu.wohlben.qits:qits-userflows` (test scope, version pinned in the root pom); how to
 write one is in that library's `AGENTS.md` and `docs/report-contract.md`.
 
@@ -514,7 +516,8 @@ launched process migrates but does **not** clean its schema, so the store carrie
 left, and a listing assertion filters rather than assuming an empty table. Install the tap from
 `@BeforeAll` and pin at least one edge, or a later edit that drops the install empties every diagram
 in the class while every remaining assertion still passes. And **add the class to
-`.config/qits/ci-event-release-request.yml`'s `-Dit.test` list in the same commit**: a class that is not
+`.config/qits/userflow-stories` in the same commit** — one class name per line, which the archetype
+turns into the verify step's `-Dit.test`: a class that is not
 named does not run there, and its story disappears from the published bundle with the build green.
 
 The whole gate locally, in one line:
