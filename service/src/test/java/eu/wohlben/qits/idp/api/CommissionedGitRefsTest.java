@@ -36,9 +36,10 @@ import org.junit.jupiter.api.Test;
  * filters on it. <b>Roles per kind are code now, not configuration</b>
  * (service-client-identity-plan.md, D3/D12): a commission's role is its context kind's fixed one
  * ({@code workspace}, {@code agent-container}, {@code refinement} → {@code qits:agent}; {@code
- * ci-run} → {@code qits:ci-run}) or, for any other kind, none at all beyond its own self-role. There
- * is no longer a way to configure one, so these tests exercise the four shipped kinds and an
- * invented, deliberately unknown one rather than a test-only configured kind.
+ * ci-run} and {@code bootstrap-publish} → {@code qits:ci-run}) or, for any other kind, none at all
+ * beyond its own self-role. There is no longer a way to configure one, so these tests exercise the
+ * five shipped kinds and an invented, deliberately unknown one rather than a test-only configured
+ * kind.
  */
 @QuarkusTest
 public class CommissionedGitRefsTest {
@@ -323,13 +324,18 @@ public class CommissionedGitRefsTest {
 
   // --- phase 4: the kinds the jar ships roles for -------------------------------------------------
 
-  /** The shipped lines in the idp jar's META-INF/microprofile-config.properties, as they are. */
+  /**
+   * The shipped code map, {@code CommissionRoles.SHIPPED}, as it is. Every case below iterates this
+   * and each iteration stands alone, so {@code Map.of}'s salted, per-JVM iteration order changes
+   * nothing — do not write a case here whose outcome depends on the order.
+   */
   private static final Map<String, String> SHIPPED_KINDS =
       Map.of(
           "workspace", "qits:agent",
           "agent-container", "qits:agent",
           "refinement", "qits:agent",
-          "ci-run", "qits:ci-run");
+          "ci-run", "qits:ci-run",
+          "bootstrap-publish", "qits:ci-run");
 
   @Test
   public void eachShippedKindCarriesExactlyItsRoleAndItsSelfRole() throws Exception {
@@ -354,6 +360,38 @@ public class CommissionedGitRefsTest {
 
       decommission(OWNER, OWNER_SECRET, commission.clientId()).statusCode(204);
     }
+  }
+
+  @Test
+  public void theBootstrapsPublishingCredentialCarriesTheCiRunRoleAndMayPushNothing()
+      throws Exception {
+    // User ruling 2026-09-13: only CI may publish to qits-artifacts, so the bootstrap gets its own
+    // publishing credential for its publish phase — the CI publisher's role, gitRefs: [] — and
+    // deletes it when that phase ends.
+    Commission publish =
+        created(OWNER, OWNER_SECRET, body("bootstrap-publish", "ctx-bootstrap", List.of()));
+
+    JwtClaims claims = claimsOf(publish.clientId(), publish.secret());
+    assertEquals(
+        List.of("qits:ci-run", "clients/" + publish.clientId()),
+        claims.getStringListClaimValue("groups"),
+        "the CI publisher's role, because publishing is CI's door — never the owner's roles");
+    assertEquals("bootstrap-publish", claims.getClaimValueAsString("context_kind"));
+
+    // [] is a statement and not an absence: the claim is there, and it permits nothing. A
+    // credential with no list stated carries no claim at all and is therefore unrestricted, which
+    // is the opposite answer — see aCommissionThatStatesNoListCarriesItsKindAndNoRefs.
+    assertTrue(claims.hasClaim("git_refs"), "an empty list is a statement, not an absence");
+    assertEquals(
+        List.of(),
+        claims.getStringListClaimValue("git_refs"),
+        "may push nothing: no ref matches an empty list");
+    assertEquals("", row(publish.clientId()).gitRefs, "the empty string, never null");
+
+    // And it hands itself back with no platform role — which is what makes the bootstrap's own
+    // clean-up at the end of its publish phase possible, so nothing permanent is left behind.
+    decommission(publish.clientId(), publish.secret(), publish.clientId()).statusCode(204);
+    token(publish.clientId(), publish.secret()).statusCode(401);
   }
 
   @Test

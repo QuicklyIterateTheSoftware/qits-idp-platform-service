@@ -18,6 +18,10 @@ public class CommissionRolesTest {
     assertEquals(List.of("qits:agent"), CommissionRoles.forKind("agent-container"));
     assertEquals(List.of("qits:agent"), CommissionRoles.forKind("refinement"));
     assertEquals(List.of("qits:ci-run"), CommissionRoles.forKind("ci-run"));
+    // The bootstrap's own publishing identity holds the CI publisher's role, because publishing to
+    // qits-artifacts is CI's door (user ruling 2026-09-13). It is short-lived: the bootstrap
+    // deletes it when its publish phase ends.
+    assertEquals(List.of("qits:ci-run"), CommissionRoles.forKind("bootstrap-publish"));
   }
 
   @Test

@@ -299,9 +299,11 @@ The rules around them:
   narrowing an owner's audiences narrows every credential it commissioned, at once.
 - **Its roles are its context kind's fixed ones — never its owner's**
   (`service-client-identity-plan.md`, D3/D12). `CommissionRoles` is a plain code map, not
-  configuration: `workspace`, `agent-container` and `refinement` get `qits:agent`; `ci-run` gets
-  `qits:ci-run`. Agents and CI runs are domain-scoped, so neither inherits `qits:system` or
-  `qits:admin`; their Git scope is their `git_refs`. **Any other kind gets no role at all** — only
+  configuration: `workspace`, `agent-container` and `refinement` get `qits:agent`; `ci-run` and
+  `bootstrap-publish` get `qits:ci-run` — publishing to qits-artifacts is CI's door, and
+  `bootstrap-publish` is the short-lived identity the bootstrap commissions for its own publish
+  phase and deletes when that phase ends. Agents and CI runs are domain-scoped, so neither
+  inherits `qits:system` or `qits:admin`; their Git scope is their `git_refs`. **Any other kind gets no role at all** — only
   its own self-role — which is D12: an unknown kind is harmless, not refused. A credential may
   always mint and hand itself back (`DELETE` of its own id), whatever role its kind gives it.
 - **Reads accept `qits:agent`; writes do not.** Agents keep every read they have and lose only
@@ -498,8 +500,8 @@ to boot without the `QITS_RESOURCE_DB_*` triple, and that is deliberate.
 ## What is not here yet
 
 **Per-context audience scoping.** A commissioned credential gets its owner's audiences, narrowed only
-by the claims and Git refs its commission states. Its roles are its kind's own for the agent kinds
-and `ci-run` (`qits.idp.commission.roles.<kind>`), else its owner's. The follow-up narrows the
+by the claims and Git refs its commission states. Its roles are its kind's own, fixed in code
+(`CommissionRoles`), or none at all. The follow-up narrows the
 audiences per kind, and is the same day the token lifetime is worth shrinking again.
 
 **Authorization.** Roles are stored, reported by introspection and delivered to every service, and

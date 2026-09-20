@@ -117,9 +117,13 @@ standing example, and `@RolesAllowed("clients/<x>")` in a sibling service is wha
 
 **A commissioned credential's roles are code, not a merge with its owner's**
 (`service-client-identity-plan.md`, D3/D12). `CommissionRoles.forKind` is a plain, unconfigured
-`Map<String, List<String>>`: `workspace`, `agent-container`, `refinement` (`qits:agent`) and
-`ci-run` (`qits:ci-run`) are the four the jar ships, tested as shipped in
-`CommissionedGitRefsTest` — a change to that map is a change there. **A kind not in the map gets no
+`Map<String, List<String>>`: `workspace`, `agent-container`, `refinement` (`qits:agent`), `ci-run`
+and `bootstrap-publish` (`qits:ci-run`) are the five the jar ships, tested as shipped in
+`CommissionedGitRefsTest` — a change to that map is a change there. `bootstrap-publish` holds the
+CI publisher's role on purpose (user ruling 2026-09-13, "only CI may publish to qits-artifacts"):
+it is the bootstrap's own publishing identity, commissioned with `gitRefs: []` for its publish
+phase and deleted by the bootstrap when that phase ends, so no permanent publishing identity
+remains. **A kind not in the map gets no
 role at all**, not a refusal (D12) — only its own self-role, so a test class is free to invent a
 kind without a config line to write for it. There used to be a `qits.idp.commission.roles.<kind>`
 config key that let a deployment override this; it is gone, along with the owner-role fallback it
@@ -395,8 +399,11 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   without `gitRefs`, the empty list reaching the token as `[]`, each validation rule as a 400 with no
   row, the owner-only `PUT …/git-refs` (foreign or unknown is 404, the credential itself 403) and the
   next token after it, roles per kind (`agent-test` and `reserved-test` in the suite's config, and
-  the four shipped kinds as shipped), and V7's column. `GitRefsTest` is the same rules as plain unit
-  tests; `CommissionRolesTest` is how a deployment overrides a shipped kind. The person tokens' `git_refs`
+  the five shipped kinds as shipped, `bootstrap-publish` among them), and V7's column. `GitRefsTest`
+  is the same rules as plain unit
+  tests; `CommissionRolesTest` is the code map itself, including that an unknown kind gets no role
+  at all rather than a refusal — there is no deployment override to test, that config key is gone.
+  The person tokens' `git_refs`
   are pinned in `CliOAuthTest` and `WorkstationOAuthTest`.
 - `UserAuthenticationTest` is the user surface end to end, and its cases are the invariants: a
   register token makes exactly one account, the two bootstrap roles are granted as rows, the cookie
