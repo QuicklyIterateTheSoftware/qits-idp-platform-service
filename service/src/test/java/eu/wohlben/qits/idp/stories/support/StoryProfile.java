@@ -59,7 +59,7 @@ import java.util.Map;
  * <h2>One thing is OFF, and it is the only thing this process would otherwise dial</h2>
  *
  * <p><b>The OTLP exporter.</b> The shipped configuration points this service's own SDK at {@code
- * http://qits-observability:8080/observability/api/otel}, and that is the entire outbound surface of
+ * http://dev-qits-observability:8080/observability/api/otel}, and that is the entire outbound surface of
  * a qits-platform-idp deployment besides its datasource. It is disabled here for three reasons, and
  * they are worth stating rather than assuming:
  *
