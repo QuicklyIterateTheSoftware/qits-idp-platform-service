@@ -32,8 +32,10 @@ public class IdpMetadataController {
   @Inject SigningKeys signingKeys;
 
   /**
-   * The discovery document. Everything it advertises is derived from {@code qits.idp.issuer}, so
-   * the issuer string and the endpoint URLs cannot drift apart.
+   * The discovery document. The {@code issuer} member is {@code qits.idp.issuer} and every endpoint
+   * is derived from {@code qits.idp.endpoint-base} — an identifier and an address, which on this
+   * platform are different strings. Deriving the endpoints from the issuer is what advertised a
+   * {@code jwks_uri} on the deleted plane's bare alias; see {@link Issuer} for the whole of it.
    *
    * <p>What is NOT here is as deliberate as what is: no {@code authorization_endpoint}, no {@code
    * userinfo_endpoint}, no {@code scopes_supported}. Phase 1 issues machine tokens through one

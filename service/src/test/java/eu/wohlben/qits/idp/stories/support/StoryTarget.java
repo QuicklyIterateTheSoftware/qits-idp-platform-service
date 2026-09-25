@@ -185,8 +185,23 @@ public final class StoryTarget {
   /**
    * The shipped {@code qits.idp.issuer}. The launched process reads the jar's own default, so this
    * is the string a consumer configures rather than one this suite invented.
+   *
+   * <p>It is an IDENTIFIER: the {@code iss} of every token and the {@code issuer} member of the
+   * discovery document, compared for equality and dialled by nothing. {@link #ENDPOINT_BASE} is
+   * the address, and the two are deliberately different strings on this platform.
    */
   public static final String ISSUER = "http://qits-platform-idp:8080/idp";
+
+  /**
+   * The shipped {@code qits.idp.endpoint-base}: what the discovery document's endpoints hang off,
+   * and the address a consumer actually dials.
+   *
+   * <p>{@code QITS_ENVIRONMENT} is unset under the suite, so the shipped default resolves its own
+   * {@code dev} arm — which is the point of asserting it here rather than a fixture: the launched
+   * process reads the jar's default, so a change to that default fails this suite rather than a
+   * deployment.
+   */
+  public static final String ENDPOINT_BASE = "http://dev-qits-platform-idp:8080/idp";
 
   /** The token's shipped lifetime, in seconds — an hour since the commission model landed. */
   public static final int TOKEN_TTL_SECONDS = 3600;

@@ -22,8 +22,18 @@ import org.jose4j.keys.resolvers.JwksVerificationKeyResolver;
  */
 public final class PublishedJwks {
 
-  /** The issuer the shipped {@code qits.idp.issuer} default names, which the suite runs on. */
+  /**
+   * The issuer the shipped {@code qits.idp.issuer} default names, which the suite runs on. It is
+   * the {@code iss} claim and the discovery document's {@code issuer} member, and nothing dials it.
+   */
   public static final String ISSUER = "http://qits-platform-idp:8080/idp";
+
+  /**
+   * The address the shipped {@code qits.idp.endpoint-base} default names — every advertised
+   * endpoint hangs off this, not off {@link #ISSUER}. {@code QITS_ENVIRONMENT} is unset under the
+   * suite, so the default resolves its own {@code dev} arm.
+   */
+  public static final String ENDPOINT_BASE = "http://dev-qits-platform-idp:8080/idp";
 
   private PublishedJwks() {}
 

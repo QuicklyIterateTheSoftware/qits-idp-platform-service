@@ -280,21 +280,36 @@ public class IdpWorkstationController {
     return loopbackRedirect(raw);
   }
 
-  /** Every exact spelling of the code page this installation answers to. */
+  /**
+   * Every exact spelling of the code page this installation answers to.
+   *
+   * <p>Three, because a client may have arrived at any of them and a {@code redirect_uri} is
+   * matched by exact string: the browser origin, the ADDRESS the discovery document now advertises,
+   * and the ISSUER the document advertised while the two were one value. The last is kept for a
+   * client built against that document and costs nothing — it is a name this installation answers
+   * to, not a name anything has to resolve.
+   */
   private Set<String> cliPages() {
     Set<String> pages = new LinkedHashSet<>();
     pages.add(browserSso.canonicalOrigin() + prefix() + CLI_PAGE_PATH);
+    pages.add(issuer.endpointBase() + CLI_PAGE_PATH);
     pages.add(issuer.url() + CLI_PAGE_PATH);
     return pages;
   }
 
   /**
-   * This service's own path prefix, taken from the issuer rather than from {@code quarkus.rest.path}
-   * — the same string by construction, because the issuer is documented as the base of every
-   * endpoint the discovery document advertises, and one source cannot drift from itself.
+   * This service's own path prefix, taken from the endpoint base rather than from {@code
+   * quarkus.rest.path} — the same string by construction, because the endpoint base is the
+   * documented base of every endpoint the discovery document advertises, and one source cannot
+   * drift from itself.
+   *
+   * <p>It used to be read off the issuer, which held only while the issuer WAS that base. It is not
+   * any more: the issuer is an identifier this service is known by and the base is the address it
+   * answers on. Both happen to carry {@code /idp} today, so this was a latent read rather than a
+   * live bug — the kind that becomes one the first time an identifier is spelled without a path.
    */
   private String prefix() {
-    String path = URI.create(issuer.url()).getRawPath();
+    String path = URI.create(issuer.endpointBase()).getRawPath();
     return path == null || "/".equals(path) ? "" : path;
   }
 
