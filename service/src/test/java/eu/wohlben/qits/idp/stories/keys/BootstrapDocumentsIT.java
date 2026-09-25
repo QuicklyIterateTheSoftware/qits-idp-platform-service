@@ -7,6 +7,7 @@ import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -35,12 +36,22 @@ import org.junit.jupiter.api.BeforeAll;
  * <b>Two open documents are the whole bootstrap of the platform, and a consumer that cached them is
  * holding the right thing.</b>
  *
- * <p>Every service on qits is configured with exactly one string about identity: the issuer. From it
- * OIDC derives {@code /.well-known/openid-configuration} by its own rule, and from that document a
- * consumer reads the token endpoint and the JWKS. That is why the issuer is spelled <b>once</b>, in
- * {@code qits.idp.issuer}, and every advertised URL is derived from it — two config keys is exactly
- * how a consumer ends up rejecting a token whose {@code iss} differs from the discovery document's
- * {@code issuer} by one character.
+ * <p>Every service on qits is configured with exactly one string about identity: the idp's address.
+ * From it OIDC derives {@code /.well-known/openid-configuration} by its own rule, and from that
+ * document a consumer reads the token endpoint and the JWKS. The {@code iss} it will then compare
+ * against is spelled <b>once</b>, in {@code qits.idp.issuer} — two sources for that one string is
+ * exactly how a consumer ends up rejecting a token whose {@code iss} differs from the discovery
+ * document's {@code issuer} by one character.
+ *
+ * <p><b>The endpoints are NOT that string, and this suite used to insist they were.</b> The rule
+ * read "one key, and every advertised URL derived from it", which was sound while the idp's
+ * identifier and its address were the same text. Deleting the platform plane ended that: the
+ * address became {@code <env>-qits-platform-idp} and the issuer deliberately stayed
+ * {@code qits-platform-idp}, because a string compared for equality cannot be covered by a DNS
+ * alias. Deriving the endpoints from the issuer across that split published a {@code jwks_uri} on a
+ * dead host — invisible to every running consumer, which had it cached, and fatal to any service
+ * booting for the first time. So the endpoints hang off {@code qits.idp.endpoint-base} now and the
+ * story asserts the two are different strings.
  *
  * <p><b>And both documents are unauthenticated, which is not a relaxation.</b> A service fetches the
  * JWKS at boot, <i>before</i> it holds a token; a JWKS behind a bearer would be a service unable to
@@ -67,15 +78,21 @@ import org.junit.jupiter.api.BeforeAll;
  *
  * <h2>One seam is out of reach, and it is stated rather than worked around</h2>
  *
- * <p>The advertised URLs are absolute and name {@code http://qits-platform-idp:8080/idp}, a host
+ * <p>The advertised URLs are absolute and name {@code http://dev-qits-platform-idp:8080/idp}, a host
  * that resolves on {@code qits-net} and nowhere else. So this story <b>reads the document's
  * derivation and then addresses the paths on the launched process's own port</b> rather than
- * following the absolute URL the way a real consumer does. Pointing {@code qits.idp.issuer} at the
- * launched process is not available to a {@code @TestProfile}: the port is ephemeral and the
+ * following the absolute URL the way a real consumer does. Pointing {@code qits.idp.endpoint-base}
+ * at the launched process is not available to a {@code @TestProfile}: the port is ephemeral and the
  * overrides are computed before the process exists. What is proven here is therefore that the
- * document derives its endpoints from the one issuer string and that those <i>paths</i> serve; that
- * a consumer can resolve the <i>host</i> is a deployment fact, and {@code qits-net} is where it is
+ * document derives its endpoints from the endpoint base and that those <i>paths</i> serve; that a
+ * consumer can resolve the <i>host</i> is a deployment fact, and {@code qits-net} is where it is
  * true.
+ *
+ * <p><b>That unreachable seam is where the defect lived, and it is worth naming as a cost.</b> A
+ * story that can only assert paths cannot notice that the host in front of them stopped resolving.
+ * Nothing here would have caught it; what caught it was a service that failed to boot in
+ * production. The nearest available guard is the one added above — that the base and the issuer are
+ * different strings, so the derivation cannot quietly collapse back onto the identifier.
  */
 @QuarkusIntegrationTest
 @TestProfile(StoryProfile.class)
@@ -103,14 +120,20 @@ public class BootstrapDocumentsIT {
   @UserStory(value = STORY, category = CATEGORY)
   @UserStoryDescription(
       """
-      A service is deployed and knows one string about identity: `http://qits-platform-idp:8080/idp`.
-      Everything else it learns by asking.
+      A service is deployed and knows one string about identity: the idp's address,
+      `http://dev-qits-platform-idp:8080/idp`. Everything else it learns by asking.
 
       It derives the discovery document from that string by OIDC's own rule and reads its
-      endpoints off it. Every one of them is derived from the same issuer inside this service too
-      — `token_endpoint` is `<issuer>/token`, `jwks_uri` is `<issuer>/jwks` — so the string in a
-      token's `iss` and the string a consumer validated against cannot drift apart. Two config
-      keys is precisely how one character of drift appears, and there is only one key.
+      endpoints off it. Every one of them hangs off the same ADDRESS inside this service too —
+      `token_endpoint` is `<base>/token`, `jwks_uri` is `<base>/jwks` — so what the document sends
+      a consumer to is somewhere that answers.
+
+      The `issuer` it advertises is a different string, and that is deliberate rather than a
+      mistake: the idp is IDENTIFIED by `http://qits-platform-idp:8080/idp`, a name it stopped
+      answering on when the platform plane was deleted, and moving an identifier that is compared
+      for equality would reject every token already in flight. An address can be moved and an
+      identifier cannot, so they are two values. What must not drift is `iss` itself, and it has
+      exactly one source.
 
       Then it fetches the JWKS, holding no credential of any kind, and that has to work: a service
       fetches the keys at BOOT, before it holds a token, and a JWKS behind a bearer would be a
@@ -138,9 +161,9 @@ public class BootstrapDocumentsIT {
             .then()
             .statusCode(200)
             .body("issuer", equalTo(StoryTarget.ISSUER))
-            .body("token_endpoint", equalTo(StoryTarget.ISSUER + "/token"))
-            .body("jwks_uri", equalTo(StoryTarget.ISSUER + "/jwks"))
-            .body("authorization_endpoint", equalTo(StoryTarget.ISSUER + "/authorize"))
+            .body("token_endpoint", equalTo(StoryTarget.ENDPOINT_BASE + "/token"))
+            .body("jwks_uri", equalTo(StoryTarget.ENDPOINT_BASE + "/jwks"))
+            .body("authorization_endpoint", equalTo(StoryTarget.ENDPOINT_BASE + "/authorize"))
             .body("grant_types_supported", hasItem("client_credentials"))
             .body(
                 "token_endpoint_auth_methods_supported",
@@ -150,29 +173,39 @@ public class BootstrapDocumentsIT {
             .extract()
             .jsonPath();
 
-    // Every advertised endpoint is <issuer> plus a path, which is the whole of what "spelled once"
-    // buys: derived here, and read the same way by every consumer.
+    // The endpoints are derived from ONE base and the issuer is derived from ANOTHER, and the split
+    // is the fix rather than the drift the old single-key rule feared. What that rule got right is
+    // that `iss` has ONE source; what it got wrong is treating an address as the same kind of thing.
     String issuer = discovery.getString("issuer");
     assertEquals(
         StoryTarget.TOKEN,
         URI.create(discovery.getString("token_endpoint")).getPath(),
-        "the token endpoint is the issuer's own path plus /token");
+        "the token endpoint is the endpoint base's own path plus /token");
     assertEquals(
         StoryTarget.JWKS,
         URI.create(discovery.getString("jwks_uri")).getPath(),
-        "and the JWKS is the issuer's own path plus /jwks");
+        "and the JWKS is the endpoint base's own path plus /jwks");
     assertTrue(
-        discovery.getString("token_endpoint").startsWith(issuer)
-            && discovery.getString("jwks_uri").startsWith(issuer),
-        "both are derived from the issuer string rather than configured beside it");
+        discovery.getString("token_endpoint").startsWith(StoryTarget.ENDPOINT_BASE)
+            && discovery.getString("jwks_uri").startsWith(StoryTarget.ENDPOINT_BASE),
+        "both are derived from the endpoint base rather than configured one by one");
+    assertNotEquals(
+        issuer,
+        StoryTarget.ENDPOINT_BASE,
+        "and the base is NOT the issuer: this platform's idp is identified by a name it stopped"
+            + " answering on, which is exactly the case the one-string rule could not express");
     story
         .note(
             "the consumer derives the discovery document from the ONE string it was configured with"
-                + " and reads every endpoint off it. Inside this service they are derived from the"
-                + " same string, so a token's iss and the document a consumer validated against"
-                + " cannot drift — two config keys is exactly how one character of drift appears,"
-                + " and there is only one key")
-        .as("one-issuer-string-derives-every-endpoint");
+                + " and reads every endpoint off it. Those endpoints hang off the ADDRESS the idp"
+                + " answers on, and the issuer is a separate string it is merely IDENTIFIED by —"
+                + " here they differ, because deleting the platform plane moved the address and"
+                + " deliberately left the issuer behind. Deriving the endpoints from the issuer"
+                + " through that change is what advertised a jwks_uri on a host that no longer"
+                + " resolves: every running consumer had it cached and never noticed, and a service"
+                + " booting for the first time followed the document into UnknownHostException and"
+                + " rolled back. What still must not drift is `iss`, and it has one source")
+        .as("the-endpoints-derive-from-the-address-the-issuer-identifies-only");
 
     // ---- the keys, fetched holding nothing --------------------------------------------------------
     // The PATH comes from the document; the host does not, and cannot — see the class javadoc.

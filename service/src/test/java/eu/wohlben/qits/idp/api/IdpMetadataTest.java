@@ -21,16 +21,22 @@ import org.junit.jupiter.api.Test;
 @QuarkusTest
 public class IdpMetadataTest {
 
+  /**
+   * The endpoints hang off the ADDRESS and the issuer is only the identifier. They are different
+   * strings here on purpose — see {@link eu.wohlben.qits.idp.control.Issuer} — and asserting the
+   * endpoints against {@code ISSUER} is exactly the mistake that shipped a {@code jwks_uri} on a
+   * host nothing resolves.
+   */
   @Test
-  public void theDiscoveryDocumentAdvertisesEndpointsDerivedFromTheIssuer() {
+  public void theDiscoveryDocumentAdvertisesEndpointsDerivedFromTheAddressAndNotTheIssuer() {
     given()
         .when()
         .get("/idp/.well-known/openid-configuration")
         .then()
         .statusCode(200)
         .body("issuer", equalTo(PublishedJwks.ISSUER))
-        .body("token_endpoint", equalTo(PublishedJwks.ISSUER + "/token"))
-        .body("jwks_uri", equalTo(PublishedJwks.ISSUER + "/jwks"))
+        .body("token_endpoint", equalTo(PublishedJwks.ENDPOINT_BASE + "/token"))
+        .body("jwks_uri", equalTo(PublishedJwks.ENDPOINT_BASE + "/jwks"))
         .body(
             "grant_types_supported",
             contains("client_credentials", "authorization_code", "refresh_token"))
@@ -50,7 +56,7 @@ public class IdpMetadataTest {
                 "branch",
                 "credential_type",
                 "git_ref_pattern"))
-        .body("authorization_endpoint", equalTo(PublishedJwks.ISSUER + "/authorize"))
+        .body("authorization_endpoint", equalTo(PublishedJwks.ENDPOINT_BASE + "/authorize"))
         .body("userinfo_endpoint", nullValue());
   }
 
