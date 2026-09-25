@@ -327,7 +327,7 @@ public class BootstrapDocumentsIT {
 
     for (String step :
         List.of(
-            "one-issuer-string-derives-every-endpoint",
+            "the-endpoints-derive-from-the-address-the-issuer-identifies-only",
             "the-keys-are-served-to-a-caller-holding-nothing",
             "a-cached-jwks-stays-the-served-jwks",
             "no-store-for-the-bearer-cacheable-for-the-documents",

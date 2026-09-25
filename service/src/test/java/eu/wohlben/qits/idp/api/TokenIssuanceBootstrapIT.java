@@ -184,15 +184,20 @@ public class TokenIssuanceBootstrapIT {
     given().get("/idp/q/health/ready").then().statusCode(200).body("status", equalTo("UP"));
 
     // The consumer's first move, and the only address it was configured with. Everything below is
-    // reached by following this document rather than by knowing a path — which is what makes the
-    // issuer string the single seam between this service and every consumer of it.
+    // reached by following this document rather than by knowing a path.
+    //
+    // TWO STRINGS COME BACK, not one. `issuer` is what the consumer will compare a token's `iss`
+    // against, and the endpoints hang off the ADDRESS this service answers on — which is not the
+    // same text, because the plane deletion moved the address and deliberately left the identifier
+    // behind. Deriving the endpoints from the identifier across that split is what published a
+    // jwks_uri on a host nothing resolves.
     given()
         .get("/idp/.well-known/openid-configuration")
         .then()
         .statusCode(200)
         .body("issuer", equalTo(PublishedJwks.ISSUER))
-        .body("token_endpoint", equalTo(PublishedJwks.ISSUER + "/token"))
-        .body("jwks_uri", equalTo(PublishedJwks.ISSUER + "/jwks"))
+        .body("token_endpoint", equalTo(PublishedJwks.ENDPOINT_BASE + "/token"))
+        .body("jwks_uri", equalTo(PublishedJwks.ENDPOINT_BASE + "/jwks"))
         .body("grant_types_supported", hasItem("client_credentials"))
         .body("id_token_signing_alg_values_supported", hasItem("RS256"));
     story
