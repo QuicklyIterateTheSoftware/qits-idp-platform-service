@@ -103,15 +103,21 @@ public class IdpPackagedSurfaceIT {
 
   @Test
   public void theDiscoveryDocumentIsWhereAnOidcConsumerLooksForIt() {
-    // auth-server-url http://qits-platform-idp:8080/idp + OIDC's own derivation = this path. It
-    // is a build-time route prefix, so the artifact is the only place it can be proven.
+    // auth-server-url http://dev-qits-platform-idp:8080/idp + OIDC's own derivation = this path.
+    // It is a build-time route prefix, so the artifact is the only place it can be proven.
+    //
+    // THE TWO STRINGS ARE DIFFERENT AND BOTH ARE SPELLED OUT HERE, because this is the packaged
+    // artifact and the shipped defaults are what it serves. `issuer` is the identifier a consumer
+    // compares `iss` against; `jwks_uri` hangs off the ADDRESS the service answers on. They were one
+    // string until the platform plane was deleted, and a jwks_uri still derived from the identifier
+    // pointed at a host that no longer resolves — see eu.wohlben.qits.idp.control.Issuer.
     given()
         .when()
         .get("/idp/.well-known/openid-configuration")
         .then()
         .statusCode(200)
         .body("issuer", equalTo("http://qits-platform-idp:8080/idp"))
-        .body("jwks_uri", equalTo("http://qits-platform-idp:8080/idp/jwks"));
+        .body("jwks_uri", equalTo("http://dev-qits-platform-idp:8080/idp/jwks"));
 
     // qits-platform-edge routes by declared route and keeps the path, so there is no unprefixed
     // form to fall back to.
