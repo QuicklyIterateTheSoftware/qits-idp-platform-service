@@ -43,8 +43,8 @@ health_path: /idp/q/health/ready
 # ephemeral container layer is not.
 # THE DATABASE IS NAMED EXPLICITLY, AND IT IS A SAFETY PIN RATHER THAN A PREFERENCE.
 # `postgresql:db` with no third segment DERIVES the database from the APPLICATION name —
-# `qits_` plus the name minus its `qits-` prefix. This application is about to be renamed
-# (qits-platform-idp -> qits-idp), so a derived name would follow it: the deployment would provision a
+# `qits_` plus the name minus its `qits-` prefix. This application is STILL TO BE renamed
+# (qits-platform-idp -> qits-idp, blocked on qits-376), and a derived name would follow it: the deployment would provision a
 # BRAND NEW EMPTY `qits_idp` and start against it, on a green deploy, with nothing failing.
 # Naming the database this application already uses makes the rename a rename of the
 # APPLICATION alone, which is the whole intent — and this line has to OUTLIVE the rename rather
