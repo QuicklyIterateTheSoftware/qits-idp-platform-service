@@ -386,34 +386,45 @@ automated callers and for the one browsing route with no secure context (see bel
     Set-Cookie: qits-session=<43 chars>; Path=/; Domain=wohlben.eu; Max-Age=43200; HttpOnly; SameSite=Lax
 
 `Secure` is appended when the request — or `X-Forwarded-Proto` — says https. A domain bootstrap
-sets `Domain=<parent domain>` so the apex and explicitly configured browser environment hosts share
-one login; localhost leaves it host-only. `Path=/` because the cookie is for the **edge**, which
+sets `Domain=<parent domain>` so the apex and every browser host under it share one login;
+localhost leaves it host-only. `Path=/` because the cookie is for the **edge**, which
 introspects it on requests to every segment, not for this service. The edge removes this named
 cookie before proxying to machine-only registry, mirror, and git-host vhosts.
 
 WebAuthn still runs only at the canonical apex origin. An unauthenticated environment navigation is
 sent there with a return authority and path; after login or registration the SPA asks
-`GET /idp/api/auth/return-location`. This service validates the authority against its configured
-browser-host allow-list and returns an absolute location. A public query string therefore cannot
-turn the login page into an open redirect.
+`GET /idp/api/auth/return-location`. This service validates the authority against its browser-host
+allow-list and returns an absolute location. A public query string therefore cannot turn the login
+page into an open redirect.
 
-An allow-list entry is either an exact authority or `*.<authority>`, which matches one or two extra
-labels in front of it — `*.dev.wohlben.eu` allows `ci.dev.wohlben.eu` and the editor tier's
-`editor.<project>.dev.wohlben.eu`, and refuses both `a.editor.qits.dev.wohlben.eu` and the bare
-`dev.wohlben.eu`. The port is part of the authority, so `*.dev.localhost:8080` refuses
-`ci.dev.localhost:9090`. One entry covers every per-service and per-project host of an environment,
-which is what those hosts need; the session cookie already spans them through
-`Domain=<parent domain>`, and WebAuthn is untouched because the ceremony still runs only at the
-canonical origin.
+**The allow-list is not configuration.** It is derived from one value, the platform's domain —
+`qits.idp.browser-sso.domain`, from `QITS_DOMAIN`, which is the bootstrap's own `--domain` input —
+as exactly two entries: the exact authority `<domain>`, and the wildcard `*.<domain>`, which matches
+up to **three** extra labels in front of it. Three is the hostname grammar's own depth: a name is
+`<app>[.<env>].<project>.<domain>` read right to left, so the two entries cover `wohlben.eu`,
+`qits.wohlben.eu`, `projects.qits.wohlben.eu`, `dev.qits.wohlben.eu` and
+`projects.dev.qits.wohlben.eu` — every application, of every project, in every environment, with
+this service knowing no project and no environment name. A fourth label is not a name the grammar
+can produce and is refused.
 
-**The second label is a wider allow-list and not a wider trust boundary.** Every wildcard entry is
-anchored under the platform's own domain — the bootstrap renders the list as
-`<domain>,<env>.<domain>,*.<domain>,*.<env>.<domain>` — and the zone points `*`, `*.*` and `*.*.*`
-at the platform's edge, where a name no vhost claims answers 404. A second label therefore reaches
-deeper *under* names the one-label rule already admitted, all of them served by this platform, so it
-opens no redirect to a foreign host. The anchor is what carries that argument, not the label count:
-an entry whose parent authority is not the platform's own domain would already have been an open
-door at one label.
+The port is part of an authority, so the canonical origin's port (where it has one) is appended to
+both derived entries: locally the domain is `localhost` and the list is `localhost:8080` and
+`*.localhost:8080`, which refuses `qits.localhost:9090`. The session cookie already spans those
+hosts through `Domain=<parent domain>`, and WebAuthn is untouched because the ceremony still runs
+only at the canonical origin.
+
+**Three labels is a wider allow-list and not a wider trust boundary.** The wildcard is anchored
+under the platform's own domain by construction, and the zone points `*`, `*.*` and `*.*.*` at the
+platform's edge, where a name no vhost claims answers 404. An extra label therefore reaches deeper
+*under* names the one-label rule already admitted, all of them served by this platform, so it opens
+no redirect to a foreign host. The anchor is what carries that argument, not the label count: an
+entry whose parent authority is not the platform's own domain would already have been an open door
+at one label, and a derived list cannot produce one.
+
+The process refuses to start when the derived list does not name the canonical origin's own
+authority. With a list derived from the domain that can only mean the domain or the canonical
+origin is wrong, which is exactly when starting anyway — and issuing bounces nobody can return
+from — would be worse than not starting.
 
 The value is 256 random bits and nothing else. This store holds a `sha-256:` fingerprint of it, so a
 dump of the idp's database logs nobody in, and the only way to learn anything from a cookie is

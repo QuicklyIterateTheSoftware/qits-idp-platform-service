@@ -5,8 +5,6 @@ import io.smallrye.config.WithDefault;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
-import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
@@ -22,11 +20,15 @@ import java.util.Set;
 @ApplicationScoped
 public class BrowserSso {
 
-  /** The prefix that turns an allow-list entry into a wildcard over its leading labels. */
-  private static final String WILDCARD = "*.";
-
-  /** How many labels a wildcard entry admits in front of its authority. */
-  private static final int WILDCARD_LABELS = 2;
+  /**
+   * How many labels a wildcard entry admits in front of its authority.
+   *
+   * <p>Three, because the platform's hostname grammar is
+   * <code>&lt;app&gt;[.&lt;env&gt;].&lt;project&gt;.&lt;domain&gt;</code> read right to left, so
+   * three labels in front of the domain is the deepest legal name there is. The bound is the
+   * grammar's own depth rather than a number picked to fit today's hosts.
+   */
+  private static final int WILDCARD_LABELS = 3;
 
   @ConfigMapping(prefix = "qits.idp.browser-sso")
   interface Config {
@@ -35,21 +37,25 @@ public class BrowserSso {
     String canonicalOrigin();
 
     /**
-     * Authorities that are allowed to receive a browser after a successful ceremony.
+     * The platform's domain — the bootstrap's own <code>--domain</code> input, as
+     * <code>QITS_DOMAIN</code> — and the sole source of the return-host allow-list.
      *
-     * <p>An entry is either an exact authority (<code>dev.wohlben.eu</code>,
-     * <code>localhost:8080</code>) or the one wildcard form <code>*.&lt;authority&gt;</code>, which
-     * matches <em>one or two</em> extra labels in front of that authority and nothing else: with
-     * <code>*.dev.wohlben.eu</code> the hosts <code>ci.dev.wohlben.eu</code> and
-     * <code>editor.qits.dev.wohlben.eu</code> are allowed, while
-     * <code>a.editor.qits.dev.wohlben.eu</code> and the bare <code>dev.wohlben.eu</code> are not.
-     * The port is part of the authority, so <code>*.dev.localhost:8080</code> allows
-     * <code>ci.dev.localhost:8080</code> and refuses <code>ci.dev.localhost:9090</code>. One
-     * wildcard entry covers every per-service host of an environment, and the second label covers
-     * the per-project hosts of the editor tier (<code>editor.&lt;project&gt;.&lt;env&gt;</code>).
+     * <p>The list is <em>derived</em>, not configured: it is the exact authority
+     * <code>&lt;domain&gt;</code> plus the one wildcard <code>*.&lt;domain&gt;</code>, which admits
+     * up to three labels in front. That is every name the hostname grammar
+     * <code>&lt;app&gt;[.&lt;env&gt;].&lt;project&gt;.&lt;domain&gt;</code> can produce —
+     * <code>qits.&lt;domain&gt;</code>, <code>projects.qits.&lt;domain&gt;</code>,
+     * <code>dev.qits.&lt;domain&gt;</code> and
+     * <code>projects.dev.qits.&lt;domain&gt;</code> — for every project and every environment,
+     * without this service knowing one project or one environment name.
+     *
+     * <p>The port is part of an authority, so the canonical origin's port (where it has one) is
+     * appended to the derived entries: locally the domain is <code>localhost</code> and the list
+     * is <code>localhost:8080</code> and <code>*.localhost:8080</code>, which allows
+     * <code>ci.dev.qits.localhost:8080</code> and refuses <code>ci.dev.qits.localhost:9090</code>.
      */
-    @WithDefault("localhost:8080")
-    List<String> browserHosts();
+    @WithDefault("localhost")
+    String domain();
 
     /** Empty means a host-only session cookie; a domain deployment names its parent domain. */
     Optional<String> cookieDomain();
@@ -74,36 +80,39 @@ public class BrowserSso {
       throw new IllegalStateException(
           "qits.idp.browser-sso.canonical-origin must be an http(s) origin with no path, query, or fragment");
     }
-    LinkedHashSet<String> configured = new LinkedHashSet<>();
-    LinkedHashSet<String> wildcards = new LinkedHashSet<>();
-    for (String host : config.browserHosts()) {
-      String entry = host == null ? null : host.strip();
-      boolean wildcard = entry != null && entry.startsWith(WILDCARD);
-      String authority = authority(wildcard ? entry.substring(WILDCARD.length()) : entry);
-      if (authority == null) {
-        continue;
-      }
-      if (wildcard) {
-        wildcards.add(authority);
-      } else {
-        configured.add(authority);
-      }
+    // The allow-list, derived from the stated domain and nothing else. Two entries: the domain
+    // itself, and the wildcard over it, which WILDCARD_LABELS bounds at the grammar's own depth.
+    // The port belongs to an authority, so a canonical origin that carries one lends it to both.
+    String stated = config.domain() == null ? "" : config.domain().strip();
+    String ported =
+        !stated.isEmpty() && stated.indexOf(':') < 0 && canonical.getPort() >= 0
+            ? stated + ":" + canonical.getPort()
+            : stated;
+    String domainAuthority = authority(ported);
+    if (domainAuthority == null) {
+      throw new IllegalStateException(
+          "qits.idp.browser-sso.domain must be the platform's domain, as QITS_DOMAIN states it");
     }
-    hosts = Set.copyOf(configured);
-    wildcardHosts = Set.copyOf(wildcards);
+    hosts = Set.of(domainAuthority);
+    wildcardHosts = Set.of(domainAuthority);
     String canonicalAuthority = authority(canonical.getAuthority());
+    // Cannot fail on a well-formed pair — the canonical origin is a name under the platform's own
+    // domain — so it firing means the domain or the derivation is wrong, which is precisely when
+    // starting anyway would be worse than not starting at all.
     if (canonicalAuthority == null || !allows(canonicalAuthority)) {
       throw new IllegalStateException(
-          "qits.idp.browser-sso.browser-hosts must include the canonical origin's authority");
+          "the allow-list derived from qits.idp.browser-sso.domain must include the canonical"
+              + " origin's authority");
     }
     cookieDomain = domain(config.cookieDomain().orElse(null));
     // Where a visitor with no valid destination lands. The canonical origin stopped being the
     // platform's front door when the login moved onto its own host, so falling back to it would
     // strand a targetless login on the IdP's own SPA. The cookie parent domain is the platform's
     // apex by construction — the same installation fact, stated once — and the edge forwards its
-    // `/` to the landing application. It only qualifies when the allow-list names it (a public
-    // installation lists its apex; the local platform's cookie parent carries no port and is not
-    // an entry), and the canonical origin stays the answer everywhere else.
+    // `/` to the landing application. It only qualifies when the derived list names it (a public
+    // installation's cookie parent IS the stated domain, so the exact entry is it; the local
+    // platform is host-only and names no parent at all), and the canonical origin stays the answer
+    // everywhere else.
     String parent = authority(cookieDomain);
     landing = parent != null && allows(parent) ? parent : canonicalAuthority;
   }
@@ -144,23 +153,25 @@ public class BrowserSso {
   /**
    * Whether the allow-list names this authority, by an exact entry or a wildcard one.
    *
-   * <p>A wildcard entry admits <b>one or two</b> labels in front of its authority — one for the
-   * per-service hosts of an environment (<code>ci.&lt;env&gt;.&lt;domain&gt;</code>), two for the
-   * per-project hosts of the editor tier (<code>editor.&lt;project&gt;.&lt;env&gt;.&lt;domain&gt;
-   * </code>). The bound stays at two rather than becoming open-ended, so the rule remains something
-   * a reader can check by counting dots.
+   * <p>A wildcard entry admits <b>up to three</b> labels in front of its authority, which is the
+   * whole of the platform's hostname grammar,
+   * <code>&lt;app&gt;[.&lt;env&gt;].&lt;project&gt;.&lt;domain&gt;</code>:
+   * <code>qits.&lt;domain&gt;</code> (one), <code>projects.qits.&lt;domain&gt;</code> and
+   * <code>dev.qits.&lt;domain&gt;</code> (two), <code>projects.dev.qits.&lt;domain&gt;</code>
+   * (three). A fourth label is not a name the grammar can produce, so it is refused. The bound
+   * stays a number rather than becoming a plain suffix match, so the rule remains something a
+   * reader can check by counting dots.
    *
-   * <p><b>Why the second label is safe.</b> Every wildcard entry this installation carries is
-   * anchored under the platform's own domain — the bootstrap renders the list as
-   * <code>&lt;domain&gt;,&lt;env&gt;.&lt;domain&gt;,*.&lt;domain&gt;,*.&lt;env&gt;.&lt;domain&gt;
-   * </code> — and the platform's DNS zone points <code>*</code>, <code>*.*</code> and
+   * <p><b>Why the extra labels are safe.</b> The single wildcard entry this installation carries is
+   * derived from the platform's own domain — {@code qits.idp.browser-sso.domain}, the bootstrap's
+   * {@code QITS_DOMAIN} — and the platform's DNS zone points <code>*</code>, <code>*.*</code> and
    * <code>*.*.*</code> at the platform's own edge, where a name no vhost claims answers 404. So
-   * every authority a second label can add resolves to this platform and to nothing else: the
+   * every authority an extra label can add resolves to this platform and to nothing else: the
    * widening is across platform-served names, not towards a foreign host, and it opens no redirect.
    * What keeps that true is the anchor, not the label count — the entry's parent authority is a
    * suffix match, so an extra label can only ever reach deeper <em>under</em> a name the one-label
    * rule already admitted. An entry whose parent is not the platform's own domain would already
-   * have been an open door at one label; do not add one.
+   * have been an open door at one label; the derivation cannot produce one.
    */
   boolean allows(String authority) {
     if (hosts.contains(authority)) {

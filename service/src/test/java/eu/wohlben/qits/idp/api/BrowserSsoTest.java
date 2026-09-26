@@ -3,7 +3,6 @@ package eu.wohlben.qits.idp.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
@@ -16,12 +15,12 @@ import org.junit.jupiter.api.Test;
  */
 public class BrowserSsoTest {
 
-  private static BrowserSso sso(String canonicalOrigin, String... browserHosts) {
-    return sso(canonicalOrigin, Optional.empty(), browserHosts);
+  private static BrowserSso sso(String canonicalOrigin, String domain) {
+    return sso(canonicalOrigin, Optional.empty(), domain);
   }
 
   private static BrowserSso sso(
-      String canonicalOrigin, Optional<String> cookieDomain, String... browserHosts) {
+      String canonicalOrigin, Optional<String> cookieDomain, String domain) {
     BrowserSso sso = new BrowserSso();
     sso.config =
         new BrowserSso.Config() {
@@ -31,8 +30,8 @@ public class BrowserSsoTest {
           }
 
           @Override
-          public List<String> browserHosts() {
-            return List.of(browserHosts);
+          public String domain() {
+            return domain;
           }
 
           @Override
@@ -45,91 +44,70 @@ public class BrowserSsoTest {
   }
 
   @Test
-  public void aWildcardEntryAllowsOneOrTwoExtraLabels() {
-    BrowserSso sso =
-        sso("https://wohlben.eu", "wohlben.eu", "dev.wohlben.eu", "*.dev.wohlben.eu");
+  public void theDerivedWildcardAllowsUpToThreeExtraLabels() {
+    // One key, one domain. The list is <domain> and *.<domain>, and nothing else.
+    BrowserSso sso = sso("https://idp.wohlben.eu", "wohlben.eu");
 
-    // One extra label: every per-service host of the environment, from one entry.
+    // One label: an application on the platform's own domain.
+    assertEquals("https://qits.wohlben.eu/", sso.returnLocation("qits.wohlben.eu", "/"));
+    // Two: an application of a project, <app>.<project>.<domain>. This is the live bug — the
+    // accreted list did not carry it, and a completed sign-in bounced back to the front door.
     assertEquals(
-        "https://ci.dev.wohlben.eu/projects",
-        sso.returnLocation("ci.dev.wohlben.eu", "/projects"));
-    // Two: the editor tier, editor.<project>.<env>.<domain>. The same entry covers it, because
-    // every name it can match is served by this platform's own edge.
+        "https://projects.qits.wohlben.eu/edit",
+        sso.returnLocation("projects.qits.wohlben.eu", "/edit"));
+    // Two the other way round, <env>.<project>.<domain>.
+    assertEquals("https://dev.qits.wohlben.eu/", sso.returnLocation("dev.qits.wohlben.eu", "/"));
+    // Three, the grammar's full depth: <app>.<env>.<project>.<domain>.
     assertEquals(
-        "https://editor.qits.dev.wohlben.eu/projects",
-        sso.returnLocation("editor.qits.dev.wohlben.eu", "/projects"));
-    // Three is nothing the edge serves and falls back to the front door; only the authority is
-    // replaced, the path was safe on its own.
+        "https://projects.dev.qits.wohlben.eu/",
+        sso.returnLocation("projects.dev.qits.wohlben.eu", "/"));
+    // Four is not a name the grammar can produce, so it falls back to the front door; only the
+    // authority is replaced, the path was safe on its own.
     assertEquals(
-        "https://wohlben.eu/projects",
-        sso.returnLocation("a.editor.qits.dev.wohlben.eu", "/projects"));
-    // The wildcard does not name its own parent; the exact entry beside it does.
-    assertEquals("https://dev.wohlben.eu/", sso.returnLocation("dev.wohlben.eu", "/"));
-    assertEquals("https://wohlben.eu/", sso.returnLocation("evil.example", "/"));
+        "https://idp.wohlben.eu/projects",
+        sso.returnLocation("a.projects.dev.qits.wohlben.eu", "/projects"));
+    // The exact entry names the domain itself, which the wildcard does not.
+    assertEquals("https://wohlben.eu/", sso.returnLocation("wohlben.eu", "/"));
+  }
+
+  @Test
+  public void aDifferentDomainIsRefusedHoweverItIsSpelled() {
+    BrowserSso sso = sso("https://idp.wohlben.eu", "wohlben.eu");
+
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("evil.example", "/"));
     // A foreign host that merely ends in the same labels is a different authority.
-    assertEquals("https://wohlben.eu/", sso.returnLocation("evil-dev.wohlben.eu.example", "/"));
-  }
-
-  @Test
-  public void theEditorTierIsAdmittedByTheDomainWideEntryToo() {
-    // The list the bootstrap renders: <domain>, <env>.<domain>, *.<domain>, *.<env>.<domain>.
-    BrowserSso sso =
-        sso(
-            "https://idp.wohlben.dev",
-            Optional.of("wohlben.dev"),
-            "wohlben.dev",
-            "dev.wohlben.dev",
-            "*.wohlben.dev",
-            "*.dev.wohlben.dev");
-
-    assertEquals(
-        "https://editor.qits.dev.wohlben.dev/edit",
-        sso.returnLocation("editor.qits.dev.wohlben.dev", "/edit"));
-    // Two labels under the domain-wide entry, which is the same environment host set.
-    assertEquals(
-        "https://ci.dev.wohlben.dev/", sso.returnLocation("ci.dev.wohlben.dev", "/"));
-    // Four labels deep is still refused, by every entry on the list.
-    assertEquals(
-        "https://wohlben.dev/", sso.returnLocation("a.editor.qits.dev.wohlben.dev", "/"));
-  }
-
-  @Test
-  public void theWildcardParentCarriesItsPort() {
-    BrowserSso sso = sso("http://dev.localhost:8080", "dev.localhost:8080", "*.dev.localhost:8080");
-
-    assertEquals("http://ci.dev.localhost:8080/", sso.returnLocation("ci.dev.localhost:8080", "/"));
-    assertEquals(
-        "http://editor.qits.dev.localhost:8080/",
-        sso.returnLocation("editor.qits.dev.localhost:8080", "/"));
-    // A host that matches by name but not by port is a different authority, at either depth.
-    assertEquals("http://dev.localhost:8080/", sso.returnLocation("ci.dev.localhost:9090", "/"));
-    assertEquals("http://dev.localhost:8080/", sso.returnLocation("ci.dev.localhost", "/"));
-    assertEquals(
-        "http://dev.localhost:8080/", sso.returnLocation("editor.qits.dev.localhost:9090", "/"));
-    assertEquals(
-        "http://dev.localhost:8080/", sso.returnLocation("editor.qits.dev.localhost", "/"));
-  }
-
-  @Test
-  public void exactEntriesStillDecideAlone() {
-    BrowserSso sso = sso("http://localhost:8080", "localhost:8080", "dev.wohlben.eu");
-
-    assertEquals(
-        "http://dev.wohlben.eu/projects/7?tab=runs",
-        sso.returnLocation("dev.wohlben.eu", "/projects/7?tab=runs"));
-    assertEquals("http://localhost:8080/", sso.returnLocation("ci.dev.wohlben.eu", "/"));
-    // An exact entry names one authority and never a label in front of it, at either depth.
-    assertEquals("http://localhost:8080/", sso.returnLocation("editor.qits.dev.wohlben.eu", "/"));
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("wohlben.eu.example", "/"));
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("qits.wohlben.eu.example", "/"));
+    // And a name that merely ends in the same characters without a label boundary.
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("evilwohlben.eu", "/"));
     // Still no open redirect through the path either.
-    assertEquals("http://localhost:8080/", sso.returnLocation("evil.example", "//evil.example"));
+    assertEquals("https://idp.wohlben.eu/", sso.returnLocation("evil.example", "//evil.example"));
+  }
+
+  @Test
+  public void theDerivedEntriesCarryTheCanonicalOriginsPort() {
+    // The shipped local story: the domain is `localhost` and the canonical origin lends :8080.
+    BrowserSso sso = sso("http://localhost:8080", "localhost");
+
+    assertEquals("http://localhost:8080/", sso.returnLocation("localhost:8080", "/"));
+    assertEquals("http://qits.localhost:8080/", sso.returnLocation("qits.localhost:8080", "/"));
+    assertEquals(
+        "http://projects.dev.qits.localhost:8080/",
+        sso.returnLocation("projects.dev.qits.localhost:8080", "/"));
+    // The port is part of the authority, so a mismatched or missing one is a different host, at
+    // every depth.
+    assertEquals("http://localhost:8080/", sso.returnLocation("qits.localhost:9090", "/"));
+    assertEquals("http://localhost:8080/", sso.returnLocation("qits.localhost", "/"));
+    assertEquals("http://localhost:8080/", sso.returnLocation("localhost", "/"));
+    assertEquals(
+        "http://localhost:8080/", sso.returnLocation("projects.dev.qits.localhost:9090", "/"));
   }
 
   @Test
   public void aTargetlessLoginLandsAtTheAllowListedCookieParentRatherThanTheIdpItself() {
-    // The public shape since the login moved onto its own host: canonical is idp.<domain>, the
-    // cookie parent is the apex, and the apex is an allow-list entry.
-    BrowserSso sso =
-        sso("https://idp.wohlben.eu", Optional.of("wohlben.eu"), "wohlben.eu", "*.wohlben.eu");
+    // The public shape: canonical is idp.<domain>, the cookie parent is the domain, and the domain
+    // is the derived list's exact entry.
+    BrowserSso sso = sso("https://idp.wohlben.eu", Optional.of("wohlben.eu"), "wohlben.eu");
 
     // No target at all — a typed login address — goes to the platform's front door, not the IdP.
     assertEquals("https://wohlben.eu/", sso.returnLocation(null, null));
@@ -140,29 +118,39 @@ public class BrowserSsoTest {
   }
 
   @Test
-  public void aCookieParentTheAllowListDoesNotNameChangesNothing() {
-    // The local platform: the cookie parent carries no port, so it is not a listed authority and
-    // the canonical origin remains the fallback, exactly as before.
-    BrowserSso sso =
-        sso(
-            "http://dev.localhost:8080",
-            Optional.of("dev.localhost"),
-            "dev.localhost:8080",
-            "*.dev.localhost:8080");
+  public void aCookieParentTheDerivedListDoesNotNameChangesNothing() {
+    // The local platform: the cookie is host-only, so there is no parent to land at and the
+    // canonical origin remains the fallback, exactly as before.
+    BrowserSso sso = sso("http://localhost:8080", Optional.empty(), "localhost");
 
-    assertEquals("http://dev.localhost:8080/", sso.returnLocation(null, null));
-    assertEquals("http://dev.localhost:8080/", sso.returnLocation("evil.example", "/"));
+    assertEquals("http://localhost:8080/", sso.returnLocation(null, null));
+    assertEquals("http://localhost:8080/", sso.returnLocation("evil.example", "/"));
+
+    // And a parent that is a name UNDER the domain rather than the domain itself: allowed by the
+    // wildcard, so it is where a targetless login lands.
+    BrowserSso deeper =
+        sso("https://idp.qits.wohlben.eu", Optional.of("qits.wohlben.eu"), "wohlben.eu");
+    assertEquals("https://qits.wohlben.eu/", deeper.returnLocation(null, null));
   }
 
   @Test
-  public void aWildcardEntryMayCoverTheCanonicalOriginItself() {
+  public void theProcessRefusesToStartWhenTheDerivationDoesNotCoverTheCanonicalOrigin() {
+    // The ordinary case starts: the canonical origin is a name under the stated domain.
     assertEquals(
-        "https://ci.dev.wohlben.eu/",
-        sso("https://dev.wohlben.eu", "*.wohlben.eu", "*.dev.wohlben.eu")
-            .returnLocation("ci.dev.wohlben.eu", "/"));
-    // An allow-list that names neither the canonical authority nor a parent of it is a
-    // misconfiguration, and the process refuses to start on it.
+        "https://qits.wohlben.eu/",
+        sso("https://idp.wohlben.eu", "wohlben.eu").returnLocation("qits.wohlben.eu", "/"));
+
+    // A domain that does not cover the canonical origin is a misconfiguration of one of the two,
+    // and the process refuses to start on it rather than issuing bounces nobody can return from.
     assertThrows(
-        IllegalStateException.class, () -> sso("https://dev.wohlben.eu", "*.dev.wohlben.eu"));
+        IllegalStateException.class, () -> sso("https://idp.wohlben.eu", "example.org"));
+    // Including one that is merely too shallow for the canonical origin's own depth.
+    assertThrows(
+        IllegalStateException.class,
+        () -> sso("https://a.projects.dev.qits.wohlben.eu", "wohlben.eu"));
+    // A domain that is not an authority at all is refused in its own right.
+    assertThrows(IllegalStateException.class, () -> sso("https://idp.wohlben.eu", ""));
+    assertThrows(
+        IllegalStateException.class, () -> sso("https://idp.wohlben.eu", "wohlben.eu/steal"));
   }
 }
