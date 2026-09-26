@@ -11,7 +11,7 @@
 # Every derivation the deployer makes hangs off this name — the wire alias peers dial, the container
 # it manages, the extras family, the database — so letting it follow the repository would
 # decommission the running service and start a stranger beside it.
-application: qits-idp
+application: qits-platform-idp
 
 # This is a redirect destination and token/JWKS surface, not a left-navigation destination.
 routes: /idp
