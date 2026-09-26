@@ -416,6 +416,11 @@ least of all on a service it issues tokens for. Everything it knows arrives as c
   **shipped** `quarkus.webauthn.origins` value (webauthn4j checks the origin inside the browser's
   own clientDataJSON, never the port the request arrived on — so a random test port is fine), and
   the emulator hashes `localhost` as the relying party, which the shipped rp id must therefore be.
+  Both are **derived** now, by `PlatformDomain` from the stated `QITS_DOMAIN`, and neither can be
+  overridden — so the constraint lands on the derivation itself: with no domain stated it must keep
+  composing `localhost` and `http://localhost:8080`, and never `idp.qits.localhost:8080`.
+  `BrowserSsoTest` pins the arithmetic and `DerivedBrowserHostsTest` pins that the config source
+  factory composing it is actually discovered, which is the only way that wiring can fail.
   Every test invents its own username, because the suite shares one application and one store.
 - `SessionLifetimeTest` costs its own application start to pin `qits.idp.session-ttl`, the way
   `TokenLifetimeTest` does for the token's. It is also the only place expiry is proven: the shipped

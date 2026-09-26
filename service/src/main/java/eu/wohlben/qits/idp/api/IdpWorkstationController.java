@@ -262,8 +262,9 @@ public class IdpWorkstationController {
    * <p>The CLI's own page is compared against strings BUILT FROM CONFIGURATION — never assembled
    * from anything in the request — so there is no spelling of {@code redirect_uri} that can widen
    * it. Two spellings are accepted because this installation has two true names for itself: the
-   * origin a browser reaches ({@code qits.idp.browser-sso.canonical-origin}, which is what the
-   * person's browser will actually load) and {@code qits.idp.issuer}, which every deployment so far
+   * origin a browser reaches ({@link PlatformDomain#canonicalOrigin}, derived from the stated
+   * domain, which is what the person's browser will actually load) and {@code qits.idp.issuer},
+   * which every deployment so far
    * sets to the platform-network address services dial. They are usually different hosts, and a
    * tool configured from the discovery document knows only the second, so refusing it would make
    * the documented {@code <issuer>/connect/cli} wrong in practice.

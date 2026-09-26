@@ -36,8 +36,8 @@ import org.junit.jupiter.api.Test;
  * say they are still separate: a code approved for one cannot be spent by the other, and neither
  * can a refresh token.
  *
- * <p>The addresses are the SHIPPED defaults, not test-only overrides.
- * {@code qits.idp.browser-sso.canonical-origin} is {@code http://localhost:8080} and
+ * <p>The addresses are the SHIPPED ones, not test-only overrides. The canonical origin is
+ * {@code http://localhost:8080} — what {@link PlatformDomain} derives with no domain stated — and
  * {@code qits.idp.issuer} is the platform-network name, and this suite pins both spellings of the
  * code page: an installation has two true names for itself and a CLI configured from the discovery
  * document knows only the second.

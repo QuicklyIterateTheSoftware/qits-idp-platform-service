@@ -17,16 +17,22 @@ import java.net.URI;
  *       the browser's own {@code clientDataJSON} against {@code quarkus.webauthn.origins} — and
  *       against nothing else, in particular not against the port the request actually arrived on.
  *       So this says {@code http://localhost:8080}, the value this service <b>ships</b>, and the
- *       suite therefore tests the shipped default rather than an override written for it. That it
+ *       suite therefore tests the shipped value rather than an override written for it. That it
  *       works while the suite listens on a random port is the point: {@code
  *       quarkus.http.test-port=0} and the origin list are independent.
  *   <li><b>The relying party has to be {@code localhost}.</b> {@link WebAuthnHardware} hashes that
  *       string into its authenticator data with no way to change it, so {@code
- *       quarkus.webauthn.relying-party.id} must be the same — which the shipped default is. A
- *       deployment overriding it with {@code QITS_IDP_WEBAUTHN_RP_ID} is exactly the case this
- *       suite cannot cover, and a passkey being bound to its rp id is the reason it does not have
- *       to: users are per-installation by decision.
+ *       quarkus.webauthn.relying-party.id} must be the same.
  * </ul>
+ *
+ * <p>Neither can be overridden any more: both are composed by {@link PlatformDomain} from the
+ * stated {@code QITS_DOMAIN}, and with none stated — which is the suite's case — the derivation
+ * comes out as exactly these two strings. <b>That constraint is now on the derivation itself</b>:
+ * making the local origin {@code idp.qits.localhost:8080} for symmetry with the public one would
+ * take the real ceremony out of this suite, because the emulator cannot follow. A public
+ * installation's rp id is its own domain and is the one case this suite still cannot cover; a
+ * passkey being bound to its rp id is the reason it does not have to, since users are
+ * per-installation by decision.
  */
 public class WebAuthnTestHardware {
 

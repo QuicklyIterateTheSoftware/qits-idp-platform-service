@@ -4,10 +4,13 @@ import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.net.URI;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 /**
  * The public browser boundary of this installation.
@@ -32,15 +35,18 @@ public class BrowserSso {
 
   @ConfigMapping(prefix = "qits.idp.browser-sso")
   interface Config {
-    /** The one origin that serves login, registration, and WebAuthn. */
-    @WithDefault("http://localhost:8080")
-    String canonicalOrigin();
-
     /**
      * The platform's domain — the bootstrap's own <code>--domain</code> input, as
-     * <code>QITS_DOMAIN</code> — and the sole source of the return-host allow-list.
+     * <code>QITS_DOMAIN</code> — and <b>the only thing this class is told</b>.
      *
-     * <p>The list is <em>derived</em>, not configured: it is the exact authority
+     * <p>{@link DerivedBrowserHosts} reads it and writes this key; the default here is the backstop
+     * for a config that never ran the factory. Everything else on the browser boundary comes out of
+     * {@link PlatformDomain}: the canonical origin, the cookie parent, the WebAuthn relying party
+     * and origin list. There is no second key to get wrong, and no key at all that a deployment can
+     * leave pointing at an address the estate has since renamed — which is what the three deleted
+     * ones did.
+     *
+     * <p>The allow-list is <em>derived</em> too: it is the exact authority
      * <code>&lt;domain&gt;</code> plus the one wildcard <code>*.&lt;domain&gt;</code>, which admits
      * up to three labels in front. That is every name the hostname grammar
      * <code>&lt;app&gt;[.&lt;env&gt;].&lt;project&gt;.&lt;domain&gt;</code> can produce —
@@ -54,14 +60,27 @@ public class BrowserSso {
      * is <code>localhost:8080</code> and <code>*.localhost:8080</code>, which allows
      * <code>ci.dev.qits.localhost:8080</code> and refuses <code>ci.dev.qits.localhost:9090</code>.
      */
-    @WithDefault("localhost")
+    @WithDefault(PlatformDomain.LOCAL)
     String domain();
-
-    /** Empty means a host-only session cookie; a domain deployment names its parent domain. */
-    Optional<String> cookieDomain();
   }
 
-  @jakarta.inject.Inject Config config;
+  @Inject Config config;
+
+  /**
+   * What quarkus-security-webauthn was actually handed, read back so startup can prove the two
+   * agree.
+   *
+   * <p>{@link DerivedBrowserHosts} composes this key from the same domain as the canonical origin,
+   * so a disagreement should be structurally impossible — which is the reason to assert it rather
+   * than a reason not to. The failure it guards has no other symptom: webauthn4j checks the origin
+   * inside the browser's own {@code clientDataJSON} against this list and nothing else, so a list
+   * that does not name the origin a browser actually loaded fails EVERY passkey ceremony closed,
+   * registration and login alike, with no configuration error logged anywhere and a page that just
+   * says the login failed.
+   */
+  @Inject
+  @ConfigProperty(name = PlatformDomain.WEBAUTHN_ORIGINS)
+  Optional<List<String>> webAuthnOrigins;
 
   private URI canonical;
   private Set<String> hosts;
@@ -71,21 +90,31 @@ public class BrowserSso {
 
   @PostConstruct
   void validate() {
-    canonical = URI.create(config.canonicalOrigin().strip());
+    String stated = PlatformDomain.stated(config.domain());
+    if (stated.isEmpty()) {
+      throw new IllegalStateException(
+          "qits.idp.browser-sso.domain must be the platform's domain, as QITS_DOMAIN states it");
+    }
+    // Everything a browser sees, composed from that one value. Nothing below is configuration.
+    canonical = URI.create(PlatformDomain.canonicalOrigin(stated));
     if (!("http".equals(canonical.getScheme()) || "https".equals(canonical.getScheme()))
             || canonical.getHost() == null
             || canonical.getRawQuery() != null
             || canonical.getRawFragment() != null
             || !"".equals(canonical.getPath())) {
+      // Unreachable for a domain that is a domain, which is what it is really checking: the
+      // derivation is a concatenation, so anything a stated domain can smuggle into it — a slash, a
+      // query, userinfo — surfaces here as an origin that is not one.
       throw new IllegalStateException(
-          "qits.idp.browser-sso.canonical-origin must be an http(s) origin with no path, query, or fragment");
+          "qits.idp.browser-sso.domain must be a bare domain: the origin derived from it, "
+              + canonical
+              + ", is not an http(s) origin with no path, query, or fragment");
     }
     // The allow-list, derived from the stated domain and nothing else. Two entries: the domain
     // itself, and the wildcard over it, which WILDCARD_LABELS bounds at the grammar's own depth.
     // The port belongs to an authority, so a canonical origin that carries one lends it to both.
-    String stated = config.domain() == null ? "" : config.domain().strip();
     String ported =
-        !stated.isEmpty() && stated.indexOf(':') < 0 && canonical.getPort() >= 0
+        stated.indexOf(':') < 0 && canonical.getPort() >= 0
             ? stated + ":" + canonical.getPort()
             : stated;
     String domainAuthority = authority(ported);
@@ -104,7 +133,20 @@ public class BrowserSso {
           "the allow-list derived from qits.idp.browser-sso.domain must include the canonical"
               + " origin's authority");
     }
-    cookieDomain = domain(config.cookieDomain().orElse(null));
+    // The two sides of the passkey ceremony have to name the same origin, and nothing else checks
+    // it. See the field's comment for what a mismatch costs; with both sides derived from `stated`
+    // this can only fire if something outranked the derived source, which is when refusing to start
+    // is the cheap outcome.
+    List<String> origins = webAuthnOrigins.orElse(List.of());
+    if (!origins.contains(canonicalOrigin())) {
+      throw new IllegalStateException(
+          PlatformDomain.WEBAUTHN_ORIGINS
+              + " must name the canonical origin "
+              + canonicalOrigin()
+              + " derived from qits.idp.browser-sso.domain, and is "
+              + origins);
+    }
+    cookieDomain = domain(PlatformDomain.cookieDomain(stated));
     // Where a visitor with no valid destination lands. The canonical origin stopped being the
     // platform's front door when the login moved onto its own host, so falling back to it would
     // strand a targetless login on the IdP's own SPA. The cookie parent domain is the platform's
@@ -117,7 +159,10 @@ public class BrowserSso {
     landing = parent != null && allows(parent) ? parent : canonicalAuthority;
   }
 
-  /** The configured parent domain, or {@code null} for a host-only cookie. */
+  /**
+   * The parent domain derived from the stated one, or {@code null} for a host-only cookie. See
+   * {@link PlatformDomain#cookieDomain(String)}.
+   */
   String cookieDomain() {
     return cookieDomain;
   }
@@ -129,8 +174,9 @@ public class BrowserSso {
    * platform network ({@code http://qits-platform-idp:8080/idp} in every deployment shipped so
    * far), and no browser can resolve that name. Anything a person's browser is sent to — the
    * sign-in bounce, and the CLI code page a {@code redirect_uri} may name — is built from this
-   * instead. It is configuration either way, which is the property that matters: neither is taken
-   * from the request.
+   * instead. Neither is taken from the request, which is the property that matters — the issuer is
+   * configuration and this one is derived from the stated domain ({@link
+   * PlatformDomain#canonicalOrigin(String)}), and a browser's {@code Host} header reaches neither.
    */
   String canonicalOrigin() {
     return canonical.getScheme() + "://" + canonicalAuthority();
@@ -242,7 +288,8 @@ public class BrowserSso {
     String value = raw.strip().toLowerCase(Locale.ROOT);
     if (!value.matches("[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+")) {
       throw new IllegalStateException(
-          "qits.idp.browser-sso.cookie-domain must be a parent DNS domain, or empty for host-only");
+          "the cookie parent domain derived from qits.idp.browser-sso.domain must be a parent DNS"
+              + " domain, or absent for host-only");
     }
     return value;
   }

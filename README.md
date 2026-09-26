@@ -385,9 +385,9 @@ automated callers and for the one browsing route with no secure context (see bel
 
     Set-Cookie: qits-session=<43 chars>; Path=/; Domain=wohlben.eu; Max-Age=43200; HttpOnly; SameSite=Lax
 
-`Secure` is appended when the request — or `X-Forwarded-Proto` — says https. A domain bootstrap
-sets `Domain=<parent domain>` so the apex and every browser host under it share one login;
-localhost leaves it host-only. `Path=/` because the cookie is for the **edge**, which
+`Secure` is appended when the request — or `X-Forwarded-Proto` — says https. `Domain=` is the stated
+domain itself, so the apex and every browser host under it share one login; localhost has no parent
+and leaves it host-only. `Path=/` because the cookie is for the **edge**, which
 introspects it on requests to every segment, not for this service. The edge removes this named
 cookie before proxying to machine-only registry, mirror, and git-host vhosts.
 
@@ -397,9 +397,40 @@ sent there with a return authority and path; after login or registration the SPA
 allow-list and returns an absolute location. A public query string therefore cannot turn the login
 page into an open redirect.
 
-**The allow-list is not configuration.** It is derived from one value, the platform's domain —
-`qits.idp.browser-sso.domain`, from `QITS_DOMAIN`, which is the bootstrap's own `--domain` input —
-as exactly two entries: the exact authority `<domain>`, and the wildcard `*.<domain>`, which matches
+**Nothing on the browser boundary is configuration.** The platform's domain is one fact —
+`QITS_DOMAIN`, the bootstrap's own `--domain` input, propagated into every container by
+qits-deployments — and `DerivedBrowserHosts` reads it once and hands `PlatformDomain` everything
+else:
+
+| composed | public installation | with none stated |
+| --- | --- | --- |
+| the canonical origin | `https://idp.qits.<domain>` | `http://localhost:8080` |
+| the session cookie's parent | `<domain>` | host-only |
+| `quarkus.webauthn.relying-party.id` | `<domain>` | `localhost` |
+| `quarkus.webauthn.origins` | the canonical origin | `http://localhost:8080` |
+| the return-host allow-list | `<domain>` and `*.<domain>` | `localhost:8080` and `*.localhost:8080` |
+
+`idp` is this repository's `host:` in `.config/qits/deployments.yml` and `qits` is the platform's own
+project slug, which is env-less — so the origin is the platform's hostname grammar applied to this
+application like to any other. The slug is one named constant, not a literal per derivation.
+
+Four of those used to be keys — `QITS_IDP_BROWSER_SSO_CANONICAL_ORIGIN`,
+`QITS_IDP_BROWSER_SSO_COOKIE_DOMAIN`, `QITS_IDP_WEBAUTHN_RP_ID` and `QITS_IDP_WEBAUTHN_ORIGINS` —
+injected from outside this repository, and three of them still said `idp.dev.qits.wohlben.eu` after
+the `qits` project went env-less, an address that had stopped resolving. They restated a fact
+`QITS_DOMAIN` already carried, so nothing here could notice they had gone stale. **A value nobody
+can set is a value nobody can leave behind.** A deployment that still sets any of the four is
+ignored.
+
+The derived pair is also **cross-checked at startup**: `BrowserSso` reads `quarkus.webauthn.origins`
+back and refuses to start unless it names the canonical origin. webauthn4j compares the origin
+inside the browser's own `clientDataJSON` against that list and against nothing else, so a
+disagreement fails every passkey ceremony closed — registration and login alike — with no
+configuration error logged anywhere. Both sides come from one value now, which is why the check
+should be impossible to trip and why it is worth making.
+
+**The allow-list in particular is not configuration.** It is derived from that same domain as
+exactly two entries: the exact authority `<domain>`, and the wildcard `*.<domain>`, which matches
 up to **three** extra labels in front of it. Three is the hostname grammar's own depth: a name is
 `<app>[.<env>].<project>.<domain>` read right to left, so the two entries cover `wohlben.eu`,
 `qits.wohlben.eu`, `projects.qits.wohlben.eu`, `dev.qits.wohlben.eu` and
@@ -452,10 +483,20 @@ The ceremony is quarkus-security-webauthn used **as a library**: this service ca
 attestation and the assertion itself, and issues its own session. The extension's built-in endpoints
 are off and its own `quarkus-credential` cookie is never written.
 
-`quarkus.webauthn.relying-party.id` and `.origins` are the browser-facing host, from
-`QITS_IDP_WEBAUTHN_RP_ID` and `QITS_IDP_WEBAUTHN_ORIGINS`, defaulting to `localhost` and
-`http://localhost:8080`. **A passkey is bound to the rp id it was registered under** and will not
-assert under another — which costs nothing here, because accounts are per-installation anyway.
+`quarkus.webauthn.relying-party.id` and `.origins` are **derived from the stated domain** and are
+not settable: the rp id is the domain, flat, and the origin list is the canonical origin. See the
+table above. The rp id is flat so that one passkey asserts on every host of the installation — a
+ceremony's rp id must be the page's origin or a parent of it, and the apex is the only parent every
+application shares.
+
+**A passkey is bound to the rp id it was registered under** and will not assert under another, so
+changing the stated domain invalidates every credential on the estate. **There is deliberately no
+override to pin the old value across such a move.** It was proposed and declined: *"if a domain
+change means breaking them, then that means breaking them. thats not an issue."* Accounts here are
+per-installation by decision, a new domain is a new installation in every way that matters, and a
+key existing only to survive one event would be set wrong on every deployment in between. The
+reasoning is restated in `PlatformDomain.relyingPartyId`, where the next person to reach for an
+override will read it.
 
 `localhost`, `*.localhost` and the loopback addresses are secure contexts over plain http by browser
 rule, so passkeys work on `http://localhost:8080` with no TLS. The one route that is **not** a
